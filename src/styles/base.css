@@ -22,16 +22,38 @@ body {
   overflow: hidden;
 }
 
-/* 主题切换本身也是优雅过渡（design §7） */
-body,
-body * {
-  transition-property: background-color, border-color, color, fill, stroke;
-  transition-duration: 200ms;
-  transition-timing-function: var(--ease-out);
+/* 主题切换本身也是优雅过渡（design §7），但只在 .theme-transitioning
+   窗口内启用——常驻的全局 transition 会让打字机/滚动等高频渲染付出
+   全树样式计算代价，并让所有 hover 反馈慢半拍。 */
+html.theme-transitioning body,
+html.theme-transitioning .toolbar,
+html.theme-transitioning .sidebar,
+html.theme-transitioning .block,
+html.theme-transitioning .paper,
+html.theme-transitioning .modal,
+html.theme-transitioning .popover,
+html.theme-transitioning .context-menu,
+html.theme-transitioning .settings-panel,
+html.theme-transitioning .suggestions-panel {
+  transition: background-color 200ms var(--ease-out),
+    border-color 200ms var(--ease-out), color 200ms var(--ease-out);
 }
 
 ::selection {
   background: rgba(0, 113, 227, 0.18);
+}
+
+/* 减少动态：时长令牌在 tokens.css 归零，这里再兜住所有写死毫秒的
+   keyframes 动画与原生平滑滚动（呼吸/打字机光标退化为静态呈现）。 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 :focus {

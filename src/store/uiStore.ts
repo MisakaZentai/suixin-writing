@@ -61,6 +61,8 @@ interface UIStore {
   apiKeyPresent: boolean
   theme: 'system' | 'light' | 'dark'
   toasts: Toast[]
+  /** 最近一次块级快捷键回声（'e' | 'r' | 't'），140ms 后自动清除 */
+  keyEcho: string | null
 
   setGranularity: (g: Granularity) => void
   setActive: (key: string | null) => void
@@ -99,6 +101,7 @@ interface UIStore {
   setImportOpen: (open: boolean) => void
   setTheme: (t: 'system' | 'light' | 'dark') => void
   refreshApiKeyPresence: () => Promise<void>
+  echoKey: (k: string) => void
 
   pushToast: (t: {
     kind: Toast['kind']
@@ -155,6 +158,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
   apiKeyPresent: false,
   theme: loadPrefs().theme ?? 'system',
   toasts: [],
+  keyEcho: null,
 
   setGranularity: (g) => {
     savePrefs({ granularity: g })
@@ -383,16 +387,40 @@ export const useUIStore = create<UIStore>((set, get) => ({
       s.diff ? { diff: { ...s.diff, focused: index } } : {}
     ),
   decideAll: (accepted) =>
-    set((s) =>
-      s.diff
-        ? {
-            diff: {
-              ...s.diff,
-              decisions: s.diff.decisions.map(() => accepted),
-            },
-          }
-        : {}
-    ),
+    set((s) => {
+      if (!s.diff) return {}
+      if (accepted) {
+        // 绿色波浪：自上而下每簇间隔 60ms 依次决策
+        clearWave()
+        const total = s.diff.decisions.length
+        for (let i = 0; i < total; i++) {
+          waveTimers.push(
+            window.setTimeout(() => {
+              const curr = useUIStore.getState().diff
+              if (!curr) return
+              const decisions = [...curr.decisions]
+              decisions[i] = true
+              const nextOpen = decisions.findIndex((d) => d === undefined)
+              useUIStore.setState({
+                diff: {
+                  ...curr,
+                  decisions,
+                  focused: nextOpen >= 0 ? nextOpen : curr.focused,
+                },
+              })
+            }, i * 60)
+          )
+        }
+        return {}
+      }
+      // 全部拒绝：瞬间执行（撤销永远比执行快）
+      return {
+        diff: {
+          ...s.diff,
+          decisions: s.diff.decisions.map(() => false),
+        },
+      }
+    }),
 
   /* ── 面板开关 ──────────────────────────────────────── */
 
@@ -413,7 +441,14 @@ export const useUIStore = create<UIStore>((set, get) => ({
   setTheme: (t) => {
     savePrefs({ theme: t })
     set({ theme: t })
-    applyTheme(t)
+    applyTheme(t, true)
+  },
+  echoKey: (k) => {
+    window.clearTimeout(echoTimer)
+    echoTimer = window.setTimeout(() => {
+      useUIStore.setState({ keyEcho: null })
+    }, 140)
+    set({ keyEcho: k.toLowerCase() })
   },
   refreshApiKeyPresence: async () => {
     const key = await secret.get('apiKey')
@@ -435,12 +470,39 @@ export const useUIStore = create<UIStore>((set, get) => ({
 
 /* ── 内部工具 ────────────────────────────────────────── */
 
-function applyTheme(t: 'system' | 'light' | 'dark'): void {
+let themeTimer = 0
+
+/** 应用主题。animate=true 时开启 .theme-transitioning 窗口做 200ms 色彩过渡。 */
+export function applyTheme(
+  t: 'system' | 'light' | 'dark',
+  animate = true
+): void {
   const dark =
     t === 'dark' ||
     (t === 'system' &&
       matchMedia('(prefers-color-scheme: dark)').matches)
-  document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light')
+  const next = dark ? 'dark' : 'light'
+  const root = document.documentElement
+  if (root.getAttribute('data-theme') === next) return
+  if (animate) {
+    root.classList.add('theme-transitioning')
+    window.clearTimeout(themeTimer)
+    themeTimer = window.setTimeout(
+      () => root.classList.remove('theme-transitioning'),
+      260
+    )
+  }
+  root.setAttribute('data-theme', next)
+}
+
+/* 键盘回声（design §6：E/R/T 按下时操作条按钮做一次 pressed 缩放） */
+let echoTimer = 0
+
+/* diff 全部接受的波浪计时器（design §5.5） */
+let waveTimers: number[] = []
+function clearWave(): void {
+  waveTimers.forEach((id) => window.clearTimeout(id))
+  waveTimers = []
 }
 
 function flattenToMap(project: ProjectData): Map<string, ProjectData['outline'][number]> {

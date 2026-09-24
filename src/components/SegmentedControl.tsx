@@ -1,7 +1,8 @@
 /**
- * 顶栏粒度切换器：FLIP thumb 滑动（design §5.2「全应用手感最精的组件」）。
- * 切换时 thumb 不跳变：记录旧位置 → transform 补偿 → 弹簧滑向新位置；
- * 宽度同步形变插值。键盘 1/2/3 与点击走同一动画路径。
+ * 顶栏粒度切换器（design §5.2「全应用手感最精的组件」）。
+ * thumb 的位置/宽度由 React state 驱动，CSS transition 负责平滑滑动——
+ * transform 与 width 同源过渡天然等价于 FLIP（弹簧曲线、宽度形变插值），
+ * 无需手动补偿代码。键盘 1/2/3 与点击走同一动画路径。
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
@@ -25,47 +26,27 @@ export function SegmentedControl<T extends string>({
   ariaLabel,
 }: Props<T>) {
   const containerRef = useRef<HTMLDivElement>(null)
-  const thumbRef = useRef<HTMLDivElement>(null)
   const [thumb, setThumb] = useState({ left: 0, width: 0, ready: false })
 
-  const measure = (animate: boolean) => {
+  const measure = () => {
     const container = containerRef.current
-    const thumbEl = thumbRef.current
-    if (!container || !thumbEl) return
+    if (!container) return
     const nodes = container.querySelectorAll<HTMLElement>('[data-seg-item]')
     const idx = items.findIndex((i) => i.value === value)
     const btn = nodes[idx]
     if (!btn) return
-    const left = btn.offsetLeft
-    const width = btn.offsetWidth
-    if (animate) {
-      const cRect = container.getBoundingClientRect()
-      const tRect = thumbEl.getBoundingClientRect()
-      // FLIP：先瞬移回旧位置，再靠 CSS transition 滑向新位置
-      thumbEl.style.transition = 'none'
-      thumbEl.style.transform = `translateX(${tRect.left - cRect.left}px)`
-      thumbEl.style.width = `${tRect.width}px`
-      void thumbEl.offsetWidth
-      thumbEl.style.transition = ''
-    }
-    setThumb({ left, width, ready: true })
+    setThumb({ left: btn.offsetLeft, width: btn.offsetWidth, ready: true })
   }
 
-  useLayoutEffect(() => {
-    measure(false)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  useLayoutEffect(measure, [])
 
-  useEffect(() => {
-    measure(true)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [value, items.length])
+  useEffect(measure, [value, items.length])
 
-  // 容器尺寸变化（窗口缩放）时重新对位
+  // 容器尺寸变化（窗口缩放/字体加载）时重新对位
   useEffect(() => {
     const container = containerRef.current
     if (!container || typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver(() => measure(false))
+    const ro = new ResizeObserver(measure)
     ro.observe(container)
     return () => ro.disconnect()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -74,7 +55,6 @@ export function SegmentedControl<T extends string>({
   return (
     <div className="segmented" role="tablist" aria-label={ariaLabel} ref={containerRef}>
       <div
-        ref={thumbRef}
         className="segmented-thumb"
         style={{
           transform: `translateX(${thumb.left}px)`,

@@ -15,7 +15,6 @@ interface Props {
 export function BlockFlow({ onScrolledChange }: Props) {
   const data = useProjectStore((s) => s.data)
   const granularity = useUIStore((s) => s.granularity)
-  const activeKey = useUIStore((s) => s.activeKey)
   const locateRequest = useUIStore((s) => s.locateRequest)
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -80,7 +79,8 @@ export function BlockFlow({ onScrolledChange }: Props) {
                 key={b.key}
                 block={b}
                 prevBlock={i > 0 ? blocks[i - 1] : null}
-                active={activeKey === b.key}
+                /* cascade 入场：每块延迟 25ms，最多 8 块后剩余直接显示（design §5.2） */
+                enterDelay={i <= 8 ? i * 25 : 0}
               />
             ))}
           </div>

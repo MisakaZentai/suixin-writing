@@ -60,17 +60,27 @@
   content-visibility: auto;
   contain-intrinsic-size: auto 80px;
 }
+/* 入场 cascade：粒度切换 / 导入后新块依次浮起（延迟由内联 style 下发） */
+.block-flow .block {
+  animation: block-in var(--dur-base) var(--ease-out) backwards;
+}
+@keyframes block-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
 .block.read {
   cursor: text;
   background: transparent;
   transition: background-color var(--dur-fast) var(--ease-out),
-    box-shadow var(--dur-fast) var(--ease-out),
-    transform var(--dur-fast) var(--ease-out);
+    box-shadow var(--dur-fast) var(--ease-out);
 }
+/* hover 浮起只做"材质"变化，不做位移——位移会让光标悬停区域与视觉
+   边界错位，在块边缘造成 hover 抖动链 */
 .block.read:hover {
   background: var(--bg-card);
   box-shadow: var(--shadow-1);
-  transform: translateY(-2px);
 }
 .block.read:hover .block-anchor {
   opacity: 1;
@@ -169,13 +179,35 @@
   overflow: hidden;
   transition: height var(--dur-base) var(--ease-in-out);
 }
-.morph-layer {
-  transition: opacity var(--dur-fast) var(--ease-out);
+.morph-layer.current {
+  position: relative;
 }
 .morph-layer.leaving {
   position: absolute;
   inset: 0;
   pointer-events: none;
+  /* 旧内容淡出（fade-through 的前半段） */
+  animation: morph-out 120ms var(--ease-out) forwards;
+}
+/* 新内容淡入（fade-through 的后半段，略慢于旧内容淡出） */
+.morph.morphing .morph-layer.current {
+  animation: morph-in 180ms var(--ease-out);
+}
+@keyframes morph-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes morph-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
 }
 
 /* ── 浮动操作条（slide-reveal） ────────────────────── */
@@ -194,6 +226,11 @@
   z-index: 20;
   animation: toolbar-in 180ms var(--spring-gentle);
   will-change: transform, opacity;
+}
+/* 块顶贴近视口顶部时，操作条翻到块下方，避免被顶栏裁剪 */
+.floating-toolbar.below {
+  bottom: auto;
+  top: calc(100% + 6px);
 }
 @keyframes toolbar-in {
   from {
@@ -238,6 +275,10 @@
 }
 .tool-btn .kbd {
   font-size: 10px;
+}
+/* 键盘回声（design §6：按 E/R/T 时按钮做一次 pressed 缩放） */
+.tool-btn.pressed-echo {
+  animation: echo-press 100ms var(--ease-out);
 }
 
 /* ── 编辑态 ───────────────────────────────────────── */
@@ -333,6 +374,13 @@
   margin-left: 2px;
   vertical-align: baseline;
   animation: breath 0.9s ease-in-out infinite;
+  transition: transform 150ms var(--ease-out), opacity 150ms var(--ease-out);
+}
+/* 生成完成瞬间：光标缩小消失（design §3.3） */
+.typewriter-caret.done {
+  animation: none;
+  transform: scale(0);
+  opacity: 0;
 }
 .stream-meta {
   position: absolute;
@@ -350,13 +398,31 @@
 .diff-view {
   position: relative;
 }
+/* 有未决簇时，块外内容（keep 文本）降透明度，注意力聚焦 */
+.diff-view.has-focus .prose > span:not(.diff-cluster) {
+  opacity: 0.55;
+}
+.diff-view .prose > span {
+  transition: opacity var(--dur-base) var(--ease-out);
+}
 .diff-cluster {
   position: relative;
+  display: inline;
   border-radius: var(--radius-s);
-  transition: background-color var(--dur-fast) var(--ease-out);
+  transition: background-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+  /* cascade 入场（design §5.5）：延迟由 JSX 按簇序号下发 */
+  animation: cluster-in var(--dur-fast) var(--ease-out) backwards;
+}
+@keyframes cluster-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
 }
 .diff-cluster.focused {
-  box-shadow: 0 0 0 2px var(--diff-cluster-focus-ring), 0 0 4px var(--diff-cluster-focus-ring);
+  box-shadow: 0 0 0 2px var(--diff-cluster-focus-ring),
+    0 0 4px var(--diff-cluster-focus-ring);
 }
 .diff-del,
 .diff-ins {
@@ -382,11 +448,16 @@
   display: block;
   margin-top: 2px;
 }
+/* 拒绝后：原文恢复为正文文本（无删除线、无底色） */
+.diff-restored {
+  display: inline;
+}
+/* 操作钮改为簇内右上角悬浮——原先 translate(100%) 放到簇外侧，
+   会被 .morph 的 overflow:hidden 或列宽裁剪 */
 .diff-actions {
   position: absolute;
-  right: -4px;
-  top: 50%;
-  transform: translate(100%, -50%);
+  top: -10px;
+  right: 0;
   display: flex;
   gap: 4px;
   opacity: 0;
@@ -424,26 +495,27 @@
   background: var(--danger);
   color: #fff;
 }
-/* 逐处确认后的收敛动画 */
+/* 逐处确认后的收敛动画：
+   接受——绿色"洗"到透明、文字落定为主文字色、行内排布消除两行列距；
+   拒绝——新增文本已卸载，原文以 .diff-restored 正常呈现，无需整簇隐藏
+   （原先整簇 opacity:0 会让原文也消失，留下空洞）。 */
 .diff-cluster.resolved-accept .diff-ins {
-  animation: wash-green 200ms var(--ease-out);
+  display: inline;
+  margin-top: 0;
+  animation: wash-green 200ms var(--ease-out) forwards;
 }
 @keyframes wash-green {
-  0% {
+  from {
     background: var(--diff-ins-bg);
+    color: var(--diff-ins-text);
   }
-  100% {
-    background: transparent;
-  }
-}
-.diff-cluster.resolved-reject {
-  animation: collapse-cluster var(--dur-base) var(--ease-in-out) forwards;
-}
-@keyframes collapse-cluster {
   to {
-    opacity: 0;
-    transform: translateY(-4px);
+    background: transparent;
+    color: var(--text-primary);
   }
+}
+.diff-cluster.resolved-reject .diff-ins {
+  display: none;
 }
 .diff-footer {
   display: flex;
@@ -777,6 +849,10 @@
   animation: paper-in 400ms var(--spring-gentle);
   transition: border-color var(--dur-fast) var(--ease-out),
     background-color var(--dur-fast) var(--ease-out);
+}
+/* 入场动画仅首次载入播放，之后回到空状态不再重复 */
+.paper.no-anim {
+  animation: none;
 }
 @keyframes paper-in {
   from {
