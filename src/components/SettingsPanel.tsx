@@ -1,99 +1,81 @@
 /**
- * 设置面板（spec F7 / design §5.7 右侧滑入）。
- * API Key 经 secret 存系统安全区（Tauri keyring / 浏览器 localStorage 降级）。
- * 测试连接：loading → 绿 ✓ → 红✗ 错误 height-morph。
+ * 设置面板（右侧滑入）。
+ * - AI 服务是应用级设置：选服务商 → 粘贴 Key → 自动测试，所有改动即时保存；
+ * - Key 按服务商分别存入系统安全区（桌面版 keyring，浏览器模式降级为 localStorage）；
+ * - 接口地址与模型收在"高级"里，写作者只需要理解"风格"。
  */
-import { useEffect, useRef, useState } from 'react'
-import { useProjectStore } from '../store/projectStore'
-import { useUIStore } from '../store/uiStore'
-import { secret } from '../lib/platform'
-import { testConnection, type AIConfig } from '../lib/ai'
-import { IconCheck, IconMoon, IconSettings, IconSun, IconX } from './icons'
+import { useEffect, useState } from 'react'
+import { useUIStore, type BodyFont, type Measure, type TextSize } from '../store/uiStore'
+import { useAIConfigStore } from '../store/aiConfigStore'
+import { PROVIDERS, STYLE_OPTIONS, providerById, type AIStyle } from '../lib/aiConfig'
+import { testConnection } from '../lib/ai'
+import { isTauri } from '../lib/platform'
+import { SegmentedControl } from './SegmentedControl'
+import { IconCheck, IconX } from './icons'
 
 type ThemeChoice = 'system' | 'light' | 'dark'
+
+type TestState =
+  | { kind: 'idle' }
+  | { kind: 'testing' }
+  | { kind: 'ok' }
+  | { kind: 'error'; msg: string }
 
 export function SettingsPanel() {
   const setSettingsOpen = useUIStore((s) => s.setSettingsOpen)
   const theme = useUIStore((s) => s.theme)
   const setTheme = useUIStore((s) => s.setTheme)
-  const refreshApiKeyPresence = useUIStore((s) => s.refreshApiKeyPresence)
-  const pushToast = useUIStore((s) => s.pushToast)
+  const bodyFont = useUIStore((s) => s.bodyFont)
+  const markdown = useUIStore((s) => s.markdown)
+  const textSize = useUIStore((s) => s.textSize)
+  const measure = useUIStore((s) => s.measure)
 
-  const data = useProjectStore((s) => s.data)
-  const updateSettings = useProjectStore((s) => s.updateSettings)
+  const config = useAIConfigStore((s) => s.config)
+  const keyPresent = useAIConfigStore((s) => s.keyPresent)
+  const selectProvider = useAIConfigStore((s) => s.selectProvider)
+  const update = useAIConfigStore((s) => s.update)
 
-  /* 本地表单状态：从工程 settings 初始化，编辑后写回工程 */
-  const [baseURL, setBaseURL] = useState(data?.settings.baseURL ?? '')
-  const [model, setModel] = useState(data?.settings.model ?? '')
-  const [temperature, setTemperature] = useState(
-    data?.settings.temperature ?? 0.7
-  )
-  const [apiKey, setApiKey] = useState('')
-  const [hasKey, setHasKey] = useState(false)
-  const [testing, setTesting] = useState(false)
-  const [testResult, setTestResult] = useState<
-    { ok: true } | { ok: false; msg: string } | null
-  >(null)
-  const [flashOk, setFlashOk] = useState(false)
-  const keyInputRef = useRef<HTMLInputElement>(null)
+  const [keyDraft, setKeyDraft] = useState('')
+  const [showKey, setShowKey] = useState(false)
+  const [test, setTest] = useState<TestState>({ kind: 'idle' })
+  const [advancedOpen, setAdvancedOpen] = useState(config.provider === 'custom')
+  const preset = providerById(config.provider)
 
   useEffect(() => {
-    if (!data) return
-    setBaseURL(data.settings.baseURL)
-    setModel(data.settings.model)
-    setTemperature(data.settings.temperature)
-  }, [data?.meta.updatedAt])
-
-  useEffect(() => {
-    void secret.get('apiKey').then((k) => {
-      setHasKey(Boolean(k))
-      useUIStore.setState({ apiKeyPresent: Boolean(k) })
-    })
+    void useAIConfigStore.getState().refreshKeyPresence()
   }, [])
 
-  const save = async () => {
-    if (data) updateSettings({ baseURL, model, temperature })
-    if (apiKey) {
-      await secret.set('apiKey', apiKey)
-      setHasKey(true)
-      setApiKey('')
-      void refreshApiKeyPresence()
+  const runTest = async () => {
+    setTest({ kind: 'testing' })
+    const resolved = await useAIConfigStore.getState().resolve()
+    if (!resolved) {
+      setTest({
+        kind: 'error',
+        msg: config.baseURL.trim() ? '还没有保存 API Key' : '请先在"高级"里填写接口地址',
+      })
+      return
     }
-    setFlashOk(true)
-    window.setTimeout(() => setFlashOk(false), 300)
-    pushToast({ kind: 'success', text: '设置已保存' })
-  }
-
-  const deleteKey = async () => {
-    await secret.del('apiKey')
-    setHasKey(false)
-    setApiKey('')
-    void refreshApiKeyPresence()
-    pushToast({ kind: 'info', text: 'API Key 已清除' })
-  }
-
-  const doTest = async () => {
-    setTesting(true)
-    setTestResult(null)
     try {
-      const key = apiKey || (await secret.get('apiKey')) || ''
-      if (!key) {
-        setTestResult({ ok: false, msg: '未输入 API Key' })
-        setTesting(false)
-        return
-      }
-      const config: AIConfig = {
-        baseURL,
-        apiKey: key,
-        model,
-        temperature,
-      }
-      await testConnection(config)
-      setTestResult({ ok: true })
+      await testConnection(resolved)
+      setTest({ kind: 'ok' })
     } catch (e) {
-      setTestResult({ ok: false, msg: (e as Error).message || '未知错误' })
+      setTest({ kind: 'error', msg: (e as Error).message || '未知错误' })
     }
-    setTesting(false)
+  }
+
+  const commitKey = async () => {
+    if (!keyDraft.trim()) return
+    await useAIConfigStore.getState().saveKey(keyDraft)
+    setKeyDraft('')
+    setShowKey(false)
+    await runTest()
+  }
+
+  const pickProvider = async (id: string) => {
+    setTest({ kind: 'idle' })
+    setKeyDraft('')
+    if (id === 'custom') setAdvancedOpen(true)
+    await selectProvider(id)
   }
 
   return (
@@ -104,153 +86,241 @@ export function SettingsPanel() {
           if (e.target === e.currentTarget) setSettingsOpen(false)
         }}
       />
-      <aside className="settings-panel">
+      <aside className="settings-panel" aria-label="设置">
         <div className="settings-header">
           <span>设置</span>
           <button
             className="icon-btn"
             onClick={() => setSettingsOpen(false)}
-            title="关闭"
+            title="关闭（Esc）"
             aria-label="关闭"
           >
             <IconX />
           </button>
         </div>
         <div className="settings-body">
-          {/* AI 配置 */}
-          <div className="settings-section">
-            <div className="settings-section-title">AI 接入</div>
-            <div className="field">
-              <label className="field-label">API 端点 (baseURL)</label>
-              <input
-                className="input"
-                value={baseURL}
-                onChange={(e) => setBaseURL(e.target.value)}
-                placeholder="https://api.deepseek.com/v1"
-                spellCheck={false}
-              />
-            </div>
-            <div className="field">
-              <label className="field-label">模型名</label>
-              <input
-                className="input"
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                placeholder="deepseek-chat"
-                spellCheck={false}
-              />
-            </div>
-            <div className="field">
-              <label className="field-label">温度 (0–2)</label>
-              <input
-                className="input"
-                type="number"
-                step={0.1}
-                min={0}
-                max={2}
-                value={temperature}
-                onChange={(e) => {
-                  const v = parseFloat(e.target.value)
-                  if (!Number.isNaN(v)) setTemperature(v)
-                }}
-              />
-            </div>
-          </div>
-
-          {/* API Key（系统安全存储） */}
-          <div className="settings-section">
-            <div className="settings-section-title">API Key（系统安全存储）</div>
-            <div className="settings-row">
-              <input
-                ref={keyInputRef}
-                className={`input${flashOk ? ' flash-ok' : ''}`}
-                type="password"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder={hasKey ? '已保存（输入新值可覆盖）' : '粘贴 API Key'}
-                spellCheck={false}
-              />
-            </div>
-            <div className="settings-hint">
-              {hasKey
-                ? 'Key 已存入系统安全区，永不写入工程 JSON。'
-                : 'Key 仅存本地系统安全区（Tauri keyring），不上传任何服务器。'}
-            </div>
-            {hasKey && (
-              <button
-                className="btn btn-plain btn-danger"
-                onClick={deleteKey}
-                style={{ alignSelf: 'flex-start' }}
-              >
-                清除已保存的 Key
-              </button>
-            )}
-          </div>
-
-          {/* 测试连接 */}
-          <div className="settings-section">
-            <div className="settings-section-title">连接验证</div>
-            <button
-              className="btn btn-secondary"
-              onClick={doTest}
-              disabled={testing}
-              style={{ alignSelf: 'flex-start' }}
-            >
-              {testing ? '测试中…' : '测试连接'}
-            </button>
-            {testResult && (
-              <div
-                className="settings-error"
-                style={{
-                  color: testResult.ok
-                    ? 'var(--success)'
-                    : 'var(--danger)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
-                }}
-              >
-                {testResult.ok ? (
-                  <>
-                    <IconCheck size={12} /> 连接成功
-                  </>
-                ) : (
-                  <>
-                    <IconX size={12} /> {testResult.msg}
-                  </>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* 主题 */}
-          <div className="settings-section">
-            <div className="settings-section-title">外观</div>
-            <div className="settings-row" style={{ gap: 8 }}>
-              {(['system', 'light', 'dark'] as ThemeChoice[]).map((t) => (
+          <section className="settings-section">
+            <div className="settings-section-title">AI 服务</div>
+            <div className="provider-grid" role="radiogroup" aria-label="服务商">
+              {PROVIDERS.map((p) => (
                 <button
-                  key={t}
-                  className={`btn ${theme === t ? 'btn-primary' : 'btn-secondary'}`}
-                  onClick={() => setTheme(t)}
-                  style={{ flex: 1 }}
+                  key={p.id}
+                  role="radio"
+                  aria-checked={config.provider === p.id}
+                  className={`provider-option${config.provider === p.id ? ' selected' : ''}`}
+                  onClick={() => void pickProvider(p.id)}
                 >
-                  {t === 'light' && <IconSun size={12} />}
-                  {t === 'dark' && <IconMoon size={12} />}
-                  {t === 'system' ? '跟随系统' : t === 'light' ? '浅色' : '深色'}
+                  {p.name}
                 </button>
               ))}
             </div>
-          </div>
 
-          {/* 保存 */}
-          <button
-            className="btn btn-primary"
-            onClick={save}
-            style={{ marginTop: 4 }}
-          >
-            <IconSettings size={12} />
-            保存设置
-          </button>
+            <div className="field">
+              <label className="field-label" htmlFor="api-key-input">
+                {preset.name} 的 API Key
+              </label>
+              <div className="settings-row">
+                <input
+                  id="api-key-input"
+                  className="input"
+                  type={showKey ? 'text' : 'password'}
+                  value={keyDraft}
+                  onChange={(e) => setKeyDraft(e.target.value)}
+                  onBlur={() => void commitKey()}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void commitKey()
+                  }}
+                  placeholder={keyPresent ? '已保存（粘贴新 Key 可替换）' : '粘贴 API Key，回车保存'}
+                  spellCheck={false}
+                  autoComplete="off"
+                />
+                <button
+                  className="btn btn-plain"
+                  onClick={() => setShowKey((v) => !v)}
+                  disabled={!keyDraft}
+                >
+                  {showKey ? '隐藏' : '显示'}
+                </button>
+              </div>
+            </div>
+
+            <div className="settings-row" style={{ gap: 8 }}>
+              <button
+                className="btn btn-secondary"
+                onClick={() => void runTest()}
+                disabled={test.kind === 'testing'}
+              >
+                {test.kind === 'testing' ? '测试中…' : '测试连接'}
+              </button>
+              {keyPresent && (
+                <button
+                  className="btn btn-plain btn-danger"
+                  onClick={() => {
+                    setTest({ kind: 'idle' })
+                    void useAIConfigStore.getState().deleteKey()
+                  }}
+                >
+                  清除 Key
+                </button>
+              )}
+            </div>
+            {test.kind === 'ok' && (
+              <div className="settings-status ok" role="status">
+                <IconCheck size={12} /> 已连接 · {config.model || '默认模型'}
+              </div>
+            )}
+            {test.kind === 'error' && (
+              <div className="settings-status error" role="alert">
+                <IconX size={12} /> {test.msg}
+              </div>
+            )}
+
+            <div className="field">
+              <span className="field-label">AI 风格</span>
+              <SegmentedControl<AIStyle>
+                value={config.style}
+                items={STYLE_OPTIONS.map((o) => ({ value: o.value, label: o.label, hint: o.hint }))}
+                onChange={(style) => update({ style })}
+                ariaLabel="AI 风格"
+              />
+              <span className="settings-hint">
+                {STYLE_OPTIONS.find((o) => o.value === config.style)?.hint}
+              </span>
+            </div>
+
+            <details
+              className="settings-advanced"
+              open={advancedOpen}
+              onToggle={(e) => setAdvancedOpen((e.target as HTMLDetailsElement).open)}
+            >
+              <summary>高级：接口地址与模型</summary>
+              <div className="field">
+                <label className="field-label" htmlFor="base-url-input">
+                  接口地址（OpenAI 兼容）
+                </label>
+                <input
+                  id="base-url-input"
+                  className="input"
+                  value={config.baseURL}
+                  onChange={(e) => update({ baseURL: e.target.value })}
+                  placeholder="https://example.com/v1"
+                  spellCheck={false}
+                />
+              </div>
+              <div className="field">
+                <label className="field-label" htmlFor="model-input">
+                  模型
+                </label>
+                <input
+                  id="model-input"
+                  className="input"
+                  value={config.model}
+                  onChange={(e) => update({ model: e.target.value })}
+                  list="model-suggestions"
+                  placeholder="模型名"
+                  spellCheck={false}
+                />
+                <datalist id="model-suggestions">
+                  {preset.models.map((m) => (
+                    <option key={m} value={m} />
+                  ))}
+                </datalist>
+              </div>
+            </details>
+          </section>
+
+          <section className="settings-section">
+            <div className="settings-section-title">外观</div>
+            <span className="field-label">主题</span>
+            <SegmentedControl<ThemeChoice>
+              value={theme}
+              items={[
+                { value: 'system', label: '跟随系统' },
+                { value: 'light', label: '浅色' },
+                { value: 'dark', label: '深色' },
+              ]}
+              onChange={setTheme}
+              ariaLabel="主题"
+            />
+            <div className="field">
+              <span className="field-label">正文字体</span>
+              <SegmentedControl<BodyFont>
+                value={bodyFont}
+                items={[
+                  { value: 'serif', label: '宋体' },
+                  { value: 'sans', label: '黑体' },
+                  { value: 'kai', label: '楷体' },
+                ]}
+                onChange={(f) => useUIStore.getState().setBodyFont(f)}
+                ariaLabel="正文字体"
+              />
+              <span className="settings-hint">
+                {bodyFont === 'serif' ? '内置思源宋体，不依赖系统字体' : '使用系统自带的字体'}
+              </span>
+            </div>
+            <div className="field">
+              <span className="field-label">正文字号</span>
+              <SegmentedControl<TextSize>
+                value={textSize}
+                items={[
+                  { value: 'auto', label: '自动' },
+                  { value: 's', label: '小' },
+                  { value: 'm', label: '中' },
+                  { value: 'l', label: '大' },
+                  { value: 'xl', label: '特大' },
+                ]}
+                onChange={(t) => useUIStore.getState().setTextSize(t)}
+                ariaLabel="正文字号"
+              />
+              <span className="settings-hint">
+                {textSize === 'auto' ? '随窗口变化：窗口越宽，字越大' : '固定字号，不随窗口变化'}
+              </span>
+            </div>
+            <div className="field">
+              <span className="field-label">正文宽度</span>
+              <SegmentedControl<Measure>
+                value={measure}
+                items={[
+                  { value: 'normal', label: '适中' },
+                  { value: 'wide', label: '宽' },
+                  { value: 'full', label: '铺满' },
+                ]}
+                onChange={(m) => useUIStore.getState().setMeasure(m)}
+                ariaLabel="正文宽度"
+              />
+              <span className="settings-hint">
+                {measure === 'normal'
+                  ? '每行约 40 字，读起来最舒服'
+                  : measure === 'wide'
+                    ? '每行约 52 字'
+                    : '占满窗口，只留页边'}
+              </span>
+            </div>
+            <div className="field">
+              <span className="field-label">Markdown</span>
+              <SegmentedControl<'on' | 'off'>
+                value={markdown ? 'on' : 'off'}
+                items={[
+                  { value: 'on', label: '显示效果' },
+                  { value: 'off', label: '显示源码' },
+                ]}
+                onChange={(v) => useUIStore.getState().setMarkdown(v === 'on')}
+                ariaLabel="Markdown"
+              />
+              <span className="settings-hint">
+                {markdown
+                  ? '**加粗**、列表、引用等直接显示效果；编辑时标记变淡，选中文字可用格式浮条'
+                  : '一律显示 Markdown 源码'}
+              </span>
+            </div>
+          </section>
+
+          <p className="settings-footnote">
+            所有设置即时生效，与文稿无关。
+            {isTauri
+              ? 'Key 只保存在本机系统安全区，只会发送给上面选择的服务。'
+              : '浏览器模式下 Key 保存在本机浏览器存储里（仅供开发调试），只会发送给上面选择的服务。'}
+          </p>
         </div>
       </aside>
     </>

@@ -53,7 +53,7 @@ export function Toasts() {
     <div
       key={`${isLeaving ? 'leave' : 'live'}-${t.id}`}
       className={`toast ${t.kind}${isLeaving ? ' leaving' : ''}`}
-      role="status"
+      role={t.kind === 'error' ? 'alert' : 'status'}
     >
       <span className="toast-icon">{TOAST_ICON[t.kind]}</span>
       <span>{t.text}</span>
@@ -66,6 +66,11 @@ export function Toasts() {
           }}
         >
           {t.actionLabel}
+        </button>
+      )}
+      {(t.kind === 'error' || t.duration > 4000) && !isLeaving && (
+        <button className="toast-close" onClick={() => dismiss(t.id)} aria-label="关闭提示">
+          ×
         </button>
       )}
     </div>

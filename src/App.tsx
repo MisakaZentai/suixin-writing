@@ -1,38 +1,48 @@
 /**
- * App 组装（spec §6 布局 + §6.3 快捷键总路由）。
- * - 主题应用 / API Key 状态刷新 / 启动恢复提示
- * - 30s 自动保存（崩溃保护）+ beforeunload
- * - 快捷键路由：粒度 1/2/3、块导航 ↑/↓、E/R/T、diff Tab/Y/N/Enter/Esc、
- *   Ctrl+S/Shift+S 导出、Ctrl+Z/Shift+Z 撤销重做
+ * App 组装：布局、主题、启动恢复、30s 自动保存、快捷键总路由。
  */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Toolbar } from './components/Toolbar'
 import { OutlineTree } from './components/OutlineTree'
 import { BlockFlow } from './components/BlockFlow'
-import { EmptyState } from './components/EmptyState'
+import { StartPage } from './components/StartPage'
 import { ImportModal } from './components/ImportModal'
 import { SettingsPanel } from './components/SettingsPanel'
 import { SuggestionsPanel } from './components/SuggestionsPanel'
 import { HelpOverlay } from './components/HelpOverlay'
+import { BriefModal } from './components/BriefModal'
+import { OutlineProposalModal } from './components/OutlineProposalModal'
+import { AgentAccessModal } from './components/AgentAccessModal'
+import { ExternalChangeBanner } from './components/ExternalChangeBanner'
 import { Toasts } from './components/Toasts'
 import { useShortcuts } from './hooks/useShortcuts'
 import { useProjectStore } from './store/projectStore'
 import { applyTheme, useUIStore } from './store/uiStore'
-import { loadRecovery, saveRecovery, saveTextFile } from './lib/platform'
-import {
-  buildProjectJson,
-  exportMarkdown,
-  getDisplayBlocks,
-} from './lib/project'
+import { useAIConfigStore } from './store/aiConfigStore'
+import { useDocsStore } from './store/docsStore'
+import { customTitlebar, filesToImages, isTauri, readBinaryAt, readFileAt } from './lib/platform'
+import { isImageName } from './lib/images'
+import { insertImages } from './store/imageActions'
 import { revealBlock } from './lib/scroll'
+import { abortAI, regenerate } from './store/aiActions'
+import { startBridge } from './bridge/connect'
+import { AccessRequestDialog } from './components/AccessRequestDialog'
+import { PublishModal } from './components/PublishModal'
+import { WindowControls } from './components/WindowControls'
+import { FlavorPanel } from './components/FlavorPanel'
+import { useBaselineStore } from './store/baselineStore'
 
 export function App() {
   const data = useProjectStore((s) => s.data)
-  const activeKey = useUIStore((s) => s.activeKey)
   const importOpen = useUIStore((s) => s.importOpen)
   const settingsOpen = useUIStore((s) => s.settingsOpen)
   const suggestionsOpen = useUIStore((s) => s.suggestionsOpen)
+  const flavorOpen = useUIStore((s) => s.flavorOpen)
   const helpOpen = useUIStore((s) => s.helpOpen)
+  const briefOpen = useUIStore((s) => s.briefOpen)
+  const outlineProposal = useUIStore((s) => s.outlineProposal)
+  const agentOpen = useUIStore((s) => s.agentOpen)
+  const publishOpen = useUIStore((s) => s.publishOpen)
   const sidebarOpen = useUIStore((s) => s.sidebarOpen)
   const sidebarWidth = useUIStore((s) => s.sidebarWidth)
   const setSidebarWidth = useUIStore((s) => s.setSidebarWidth)
@@ -43,129 +53,120 @@ export function App() {
   /* ── 主题 ─────────────────────────────────────────── */
   useEffect(() => {
     const mq = window.matchMedia('(prefers-color-scheme: dark)')
-    // 首帧不播过渡；系统主题切换时播放 200ms 色彩过渡
     applyTheme(theme, false)
     const onChange = () => applyTheme(theme, true)
     mq.addEventListener('change', onChange)
     return () => mq.removeEventListener('change', onChange)
   }, [theme])
 
-  /* ── 启动：Key 状态 + 恢复提示 ─────────────────────── */
+  /* ── 启动：Key 状态 + 文稿库 + AI 味基线 + 与本机 agent 的实时桥 ─── */
   useEffect(() => {
-    void useUIStore.getState().refreshApiKeyPresence()
-    void loadRecovery().then((r) => {
-      if (!r || !r.content.trim()) return
-      if (useProjectStore.getState().data) return
-      useUIStore.getState().pushToast({
-        kind: 'info',
-        text: '发现上次自动保存的文稿',
-        actionLabel: '恢复',
-        duration: 15000,
-        onAction: () => {
-          try {
-            useProjectStore.getState().loadJson(r.content)
-            useUIStore
-              .getState()
-              .pushToast({ kind: 'success', text: '已恢复自动保存的文稿' })
-          } catch (e) {
-            useUIStore.getState().pushToast({
-              kind: 'error',
-              text: `恢复失败：${(e as Error).message}`,
-            })
-          }
-        },
-      })
-    })
+    void useAIConfigStore.getState().refreshKeyPresence()
+    void useDocsStore.getState().init()
+    void useBaselineStore.getState().load()
+    void startBridge()
   }, [])
 
-  /* ── 30s 自动保存（spec F6 崩溃保护） ──────────────── */
+  /* ── 离开前落盘（自动保存有 0.8s 延迟） ─────────────── */
   useEffect(() => {
-    const id = window.setInterval(() => {
-      const st = useProjectStore.getState()
-      if (!st.unsaved || !st.data) return
-      void saveRecovery(buildProjectJson(st.data))
-      st.markSaved()
-    }, 30_000)
-    return () => window.clearInterval(id)
+    const flush = () => {
+      useUIStore.getState().confirmEdit()
+      void useDocsStore.getState().flush()
+    }
+    const onHide = () => {
+      if (document.visibilityState === 'hidden') flush()
+    }
+    window.addEventListener('beforeunload', flush)
+    window.addEventListener('pagehide', flush)
+    document.addEventListener('visibilitychange', onHide)
+    return () => {
+      window.removeEventListener('beforeunload', flush)
+      window.removeEventListener('pagehide', flush)
+      document.removeEventListener('visibilitychange', onHide)
+    }
   }, [])
 
+  /* ── 整个窗口接受文件拖放：打开为新文稿，绝不让浏览器跳转走 ── */
+  const [dropping, setDropping] = useState(false)
   useEffect(() => {
-    const handler = () => {
-      const st = useProjectStore.getState()
-      if (st.unsaved && st.data) {
-        void saveRecovery(buildProjectJson(st.data))
+    const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes('Files')
+    const onOver = (e: DragEvent) => {
+      if (!hasFiles(e)) return
+      e.preventDefault()
+      setDropping(true)
+    }
+    const onLeave = (e: DragEvent) => {
+      if (e.relatedTarget === null) setDropping(false)
+    }
+    const onDrop = (e: DragEvent) => {
+      if (!hasFiles(e)) return
+      e.preventDefault()
+      setDropping(false)
+      // 文稿开着时拖进来的图片：插进文稿
+      const files = Array.from(e.dataTransfer?.files ?? [])
+      if (useProjectStore.getState().data && files.some((f) => f.type.startsWith('image/'))) {
+        void filesToImages(files).then((imgs) => insertImages(imgs))
+        return
+      }
+      const file = e.dataTransfer?.files[0]
+      if (file) {
+        void file.text().then((text) => useDocsStore.getState().openPicked({ name: file.name, text, path: null }))
       }
     }
-    window.addEventListener('beforeunload', handler)
-    return () => window.removeEventListener('beforeunload', handler)
-  }, [])
+    window.addEventListener('dragover', onOver)
+    window.addEventListener('dragleave', onLeave)
+    window.addEventListener('drop', onDrop)
 
-  /* ── 导入 / 导出 ──────────────────────────────────── */
-  const doImportText = useCallback((text: string) => {
-    try {
-      const { truncated } = useProjectStore.getState().importText(text)
-      useUIStore.getState().setImportOpen(false)
-      useUIStore.getState().pushToast({
-        kind: truncated ? 'info' : 'success',
-        text: truncated
-          ? '文档超过 20 万字，已截断导入（原文仍在文件中）'
-          : '导入完成，已自动拆块',
-      })
-    } catch (e) {
-      useUIStore.getState().pushToast({
-        kind: 'error',
-        text: `导入失败：${(e as Error).message}`,
-      })
+    // 桌面版：拖放由 Tauri 接管，事件里带的是文件路径
+    let unlisten: (() => void) | undefined
+    if (isTauri) {
+      void import('@tauri-apps/api/webview')
+        .then(({ getCurrentWebview }) =>
+          getCurrentWebview().onDragDropEvent(async (event) => {
+            const p = event.payload
+            if (p.type === 'over' || p.type === 'enter') setDropping(true)
+            else if (p.type === 'leave') setDropping(false)
+            else if (p.type === 'drop') {
+              setDropping(false)
+              const images = p.paths.filter(isImageName)
+              if (useProjectStore.getState().data && images.length) {
+                const picked = await Promise.all(
+                  images.map(async (path) => ({ name: path.split(/[\\/]/).pop() ?? path, bytes: (await readBinaryAt(path)) ?? new Uint8Array() }))
+                )
+                await insertImages(picked)
+                return
+              }
+              const path = p.paths[0]
+              const text = path ? await readFileAt(path) : null
+              if (path && text != null) {
+                await useDocsStore.getState().openPicked({
+                  name: path.split(/[\\/]/).pop() ?? path,
+                  text,
+                  path,
+                })
+              }
+            }
+          })
+        )
+        .then((fn) => {
+          unlisten = fn
+        })
+        .catch(() => {
+          /* 拿不到拖放事件时退回 HTML5 拖放 */
+        })
     }
-  }, [])
-
-  const doImportJson = useCallback((text: string) => {
-    try {
-      useProjectStore.getState().loadJson(text)
-      useUIStore.getState().setImportOpen(false)
-      useUIStore.getState().pushToast({
-        kind: 'success',
-        text: '工程已读取，现场已恢复',
-      })
-    } catch (e) {
-      useUIStore.getState().pushToast({
-        kind: 'error',
-        text: `读档失败：${(e as Error).message}`,
-      })
-    }
-  }, [])
-
-  const exportJsonFile = useCallback(async () => {
-    const st = useProjectStore.getState()
-    if (!st.data) return
-    const name = `${st.data.meta.title || '未命名文稿'}.aiwriter.json`
-    const saved = await saveTextFile(name, buildProjectJson(st.data))
-    if (saved) {
-      useUIStore
-        .getState()
-        .pushToast({ kind: 'success', text: `已导出工程 ${name}` })
-    }
-  }, [])
-
-  const exportMdFile = useCallback(async () => {
-    const st = useProjectStore.getState()
-    if (!st.data) return
-    const name = `${st.data.meta.title || '未命名文稿'}.md`
-    const saved = await saveTextFile(name, exportMarkdown(st.data))
-    if (saved) {
-      useUIStore
-        .getState()
-        .pushToast({ kind: 'success', text: `已导出 ${name}` })
+    return () => {
+      window.removeEventListener('dragover', onOver)
+      window.removeEventListener('dragleave', onLeave)
+      window.removeEventListener('drop', onDrop)
+      unlisten?.()
     }
   }, [])
 
   /* ── 侧栏拖拽调宽 ─────────────────────────────────── */
   useEffect(() => {
     if (!resizing) return
-    const onMove = (e: MouseEvent) => {
-      const w = Math.min(360, Math.max(180, e.clientX))
-      setSidebarWidth(w)
-    }
+    const onMove = (e: MouseEvent) => setSidebarWidth(Math.min(360, Math.max(180, e.clientX)))
     const onUp = () => setResizing(false)
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
@@ -179,185 +180,204 @@ export function App() {
     }
   }, [resizing, setSidebarWidth])
 
-  /* ── 当前块 → 大纲节点（双向定位 spec F5） ─────────── */
-  const activeOutlineNodeId = useMemo(() => {
-    if (!data || !activeKey) return null
-    if (activeKey === 'full') return data.blocks[0]?.outlineNodeId ?? null
-    const id = activeKey.slice(2)
-    const block = data.blocks.find((b) => b.id === id || b.paragraphId === id)
-    return block?.outlineNodeId ?? null
-  }, [data, activeKey])
-
   /* ── 快捷键总路由 ─────────────────────────────────── */
   const onKey = useCallback(
     (e: KeyboardEvent) => {
       const ui = useUIStore.getState()
       const ps = useProjectStore.getState()
 
-      /* Ctrl / Cmd 组合 */
-      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+        const docs = useDocsStore.getState()
         const k = e.key.toLowerCase()
-        if (k === 's') {
+        const plain = !e.shiftKey
+        if (plain && k === 'n') {
           e.preventDefault()
-          void exportJsonFile()
-        } else if (k === 'z') {
+          void docs.newBlank().then((first) => first && useUIStore.getState().beginEdit(first))
+        } else if (plain && k === 'o') {
+          e.preventDefault()
+          void docs.pickAndOpen()
+        } else if (plain && k === 's') {
+          e.preventDefault()
+          ui.confirmEdit()
+          void docs.save()
+        } else if (!plain && k === 's') {
+          e.preventDefault()
+          ui.confirmEdit()
+          void docs.saveAs()
+        } else if (!plain && k === 'e') {
+          e.preventDefault()
+          ui.confirmEdit()
+          void docs.exportMarkdown()
+        } else if (plain && k === 'z') {
           e.preventDefault()
           ps.undo()
-        }
-        return
-      }
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey) {
-        const k = e.key.toLowerCase()
-        if (k === 's') {
-          e.preventDefault()
-          void exportMdFile()
-        } else if (k === 'z') {
+        } else if ((!plain && k === 'z') || (plain && k === 'y')) {
           e.preventDefault()
           ps.redo()
         }
         return
       }
 
-      /* Esc：diff 全拒 > 中断生成 > 右键菜单 > 逐层关面板 / 退出编辑 */
+      /* Esc：逐层退出——对照 > 生成 > 菜单 > 面板 > 指令框 > 编辑 > 选区 > 选中 */
       if (e.key === 'Escape') {
-        if (ui.diff) {
-          ui.decideAll(false)
-        } else if (ui.stream) {
-          ui.abortAI()
-        } else if (ui.contextMenu) {
-          ui.setContextMenu(null)
-        } else if (ui.settingsOpen) {
-          ui.setSettingsOpen(false)
-        } else if (ui.suggestionsOpen) {
-          ui.setSuggestionsOpen(false)
-        } else if (ui.helpOpen) {
-          ui.setHelpOpen(false)
-        } else if (ui.importOpen) {
-          ui.setImportOpen(false)
-        } else if (ui.editing) {
-          ui.cancelEdit()
-        } else if (ui.opinion) {
-          ui.cancelOpinion()
+        if (ui.diff) ui.closeDiff()
+        else if (ui.stream) abortAI()
+        else if (ui.contextMenu) ui.setContextMenu(null)
+        else if (ui.versionPanelId) ui.setVersionPanelId(null)
+        else if (ui.settingsOpen) ui.setSettingsOpen(false)
+        else if (ui.briefOpen) ui.setBriefOpen(false)
+        else if (ui.outlineProposal) ui.setOutlineProposal(null)
+        else if (ui.agentOpen) ui.setAgentOpen(false)
+        else if (ui.publishOpen) ui.setPublishOpen(false)
+        else if (ui.suggestionsOpen) ui.setSuggestionsOpen(false)
+        else if (ui.flavorOpen) ui.setFlavorOpen(false)
+        else if (ui.helpOpen) ui.setHelpOpen(false)
+        else if (ui.importOpen) ui.setImportOpen(false)
+        else if (ui.aiPrompt) ui.closeAIPrompt()
+        else if (ui.editing) ui.confirmEdit()
+        else if (ui.aiError) ui.setAIError(null)
+        else if (ui.textRange) {
+          window.getSelection()?.removeAllRanges()
+          ui.setTextRange(null)
+        } else if (ui.selection && ui.activeId) ui.setActive(ui.activeId)
+        else if (ui.activeId) ui.setActive(null)
+        return
+      }
+
+      /* 对照确认快捷键 */
+      if (ui.diff && !ui.editing && !ui.aiPrompt) {
+        const d = ui.diff
+        const n = d.decisions.length || 1
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          ui.acceptDiff()
+        } else if (e.key === 'Backspace' || e.key === 'Delete') {
+          e.preventDefault()
+          ui.rejectDiff()
+        } else if (e.code === 'KeyE') {
+          e.preventDefault()
+          ui.acceptAndEdit()
+        } else if (e.code === 'KeyR') {
+          e.preventDefault()
+          const sg = useProjectStore.getState().data?.suggestions.find((x) => x.id === d.suggestionId)
+          if (!sg?.author) void regenerate(d.suggestionId)
+        } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+          e.preventDefault()
+          ui.switchCandidate(e.key === 'ArrowLeft' ? -1 : 1)
+        } else if (e.code === 'KeyV') {
+          const order = (d.whole ? ['result', 'compare'] : ['marked', 'result', 'compare']) as ('marked' | 'result' | 'compare')[]
+          const views = d.insert ? order.filter((v) => v !== 'compare') : order
+          ui.setDiffView(views[(views.indexOf(d.view) + 1) % views.length])
+        } else if (!d.whole && d.view === 'marked') {
+          if (e.key === 'Tab') {
+            e.preventDefault()
+            ui.focusCluster((d.focused + (e.shiftKey ? n - 1 : 1)) % n)
+          } else if (e.code === 'KeyY') ui.setDecision(d.focused, true)
+          else if (e.code === 'KeyN') ui.setDecision(d.focused, false)
         }
         return
       }
 
-      /* diff 快捷键（编辑态让位） */
-      if (ui.diff && !ui.editing && !ui.opinion) {
-        if (e.key === 'Tab') {
-          e.preventDefault()
-          const n = ui.diff.decisions.length || 1
-          ui.focusCluster(
-            (ui.diff.focused + (e.shiftKey ? n - 1 : 1)) % n
-          )
-        } else if (e.key === 'y' || e.key === 'Y') {
-          ui.setDecision(ui.diff.focused, true)
-        } else if (e.key === 'n' || e.key === 'N') {
-          ui.setDecision(ui.diff.focused, false)
-        } else if (e.key === 'Enter') {
-          e.preventDefault()
-          ui.decideAll(true)
-        }
-        return
-      }
-
-      /* 浮层打开时不做块级快捷键 */
+      /* 浮层 / 输入中不做块级快捷键 */
       if (
         ui.settingsOpen ||
         ui.helpOpen ||
+        ui.briefOpen ||
+        ui.outlineProposal ||
+        ui.agentOpen ||
+        ui.publishOpen ||
         ui.importOpen ||
         ui.contextMenu ||
         ui.editing ||
-        ui.opinion ||
+        ui.aiPrompt ||
         ui.stream
       ) {
         return
       }
 
-      if (!data) {
-        if (e.key === '?') ui.setHelpOpen(true)
+      if (e.key === '?') {
+        ui.setHelpOpen(true)
+        return
+      }
+      if (!data) return
+
+      /* 空格 / 斜杠：对当前选区（段内文字 / 多段 / 一段 / 一节）唤起 AI */
+      if (e.code === 'Space' || e.code === 'Slash') {
+        if (ui.activeId || ui.textRange) {
+          e.preventDefault()
+          ui.echoKey('ai')
+          ui.openAIPrompt()
+        }
         return
       }
 
-      /* 粒度 */
-      if (e.key === '1') ui.setGranularity('sentence')
-      else if (e.key === '2') ui.setGranularity('paragraph')
-      else if (e.key === '3') ui.setGranularity('full')
-      /* 块导航 */
-      else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault()
-        const blocks = getDisplayBlocks(data, ui.granularity)
+        const dir = e.key === 'ArrowDown' ? 1 : -1
+        if (e.shiftKey) {
+          ui.extendSelection(dir)
+          return
+        }
+        const blocks = data.blocks
         if (!blocks.length) return
-        const idx = blocks.findIndex((b) => b.key === ui.activeKey)
+        const idx = blocks.findIndex((b) => b.id === ui.activeId)
         const next =
-          e.key === 'ArrowDown'
-            ? Math.min(blocks.length - 1, (idx < 0 ? -1 : idx) + 1)
-            : Math.max(0, (idx < 0 ? blocks.length : idx) - 1)
-        const key = blocks[next].key
-        ui.setActive(key)
-        const el = document.querySelector<HTMLElement>(
-          `[data-block-key="${key.replace(/"/g, '\\"')}"]`
-        )
+          dir > 0 ? Math.min(blocks.length - 1, idx + 1) : Math.max(0, (idx < 0 ? blocks.length : idx) - 1)
+        const id = blocks[next].id
+        ui.setActive(id)
+        const el = document.querySelector<HTMLElement>(`[data-block-id="${id}"]`)
         const container = el?.closest<HTMLElement>('.column-wrap')
         if (el && container) revealBlock(container, el)
-      }
-      /* 块级操作 E/R/T：先给操作条按钮一次 pressed 回声（design §6） */
-      else if ((e.key === 'e' || e.key === 'E') && ui.activeKey) {
-        const block = getDisplayBlocks(data, ui.granularity).find(
-          (b) => b.key === ui.activeKey
-        )
-        if (block) {
-          ui.echoKey('e')
-          ui.beginEdit(block.key, block.text)
-        }
-      } else if ((e.key === 'r' || e.key === 'R') && ui.activeKey) {
-        ui.echoKey('r')
-        ui.beginOpinion(ui.activeKey)
-      } else if ((e.key === 't' || e.key === 'T') && ui.activeKey) {
-        ui.echoKey('t')
-        void ui.startRewrite(ui.activeKey)
-      }
-      /* 帮助 */
-      else if (e.key === '?') {
-        ui.setHelpOpen(true)
-      }
-    },
-    [data, exportJsonFile, exportMdFile]
-  )
-
-  /* 空文档 / 空内容时 Ctrl+V 直接导入 */
-  const onPaste = useCallback(
-    (e: ClipboardEvent) => {
-      const ui = useUIStore.getState()
-      if (ui.editing || ui.opinion) return
-      const target = e.target as HTMLElement | null
-      if (
-        target &&
-        (target.tagName === 'INPUT' ||
-          target.tagName === 'TEXTAREA' ||
-          target.isContentEditable)
-      ) {
         return
       }
-      const text = e.clipboardData?.getData('text/plain') ?? ''
-      if (!text.trim()) return
-      if (!useProjectStore.getState().data) {
+
+      const active = ui.activeId ? data.blocks.find((b) => b.id === ui.activeId) : undefined
+      if (!active || ui.selection) return
+      // 按物理键位识别，不受输入法与大小写影响
+      if (e.code === 'KeyE' || e.key === 'Enter') {
         e.preventDefault()
-        doImportText(text)
+        ui.echoKey('e')
+        ui.beginEdit(active.id)
       }
     },
-    [doImportText]
+    [data]
   )
+
+  /* 粘贴图片：插在当前段落后面；没打开文稿时 Ctrl+V 直接导入为新文稿 */
+  const onPaste = useCallback((e: ClipboardEvent) => {
+    const target = e.target as HTMLElement | null
+    const images = Array.from(e.clipboardData?.files ?? []).filter((f) => f.type.startsWith('image/'))
+    const inOtherField =
+      target && (target.tagName === 'INPUT' || (target.tagName === 'TEXTAREA' && !target.classList.contains('block-edit')))
+    if (images.length && useProjectStore.getState().data && !inOtherField) {
+      e.preventDefault()
+      void filesToImages(images).then((imgs) => insertImages(imgs))
+      return
+    }
+    if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+      return
+    }
+    const text = e.clipboardData?.getData('text/plain') ?? ''
+    if (!text.trim() || useProjectStore.getState().data) return
+    e.preventDefault()
+    const docs = useDocsStore.getState()
+    const run = text.trim().startsWith('{') ? docs.openProjectText(text) : docs.importText(text)
+    void run.catch((err: Error) =>
+      useUIStore.getState().pushToast({ kind: 'error', text: `导入失败：${err.message}`, duration: 8000 })
+    )
+  }, [])
 
   useShortcuts({ onKey, onPaste })
 
   return (
-    <div className="app">
+    <div className={`app${suggestionsOpen || (flavorOpen && data) ? ' with-side-panel' : ''}`}>
       <Toolbar scrolled={scrolled} />
+      {customTitlebar && <WindowControls />}
+      <ExternalChangeBanner />
       <div className="body">
         {data && sidebarOpen && (
           <aside className="sidebar" style={{ width: sidebarWidth }}>
-            <OutlineTree activeOutlineNodeId={activeOutlineNodeId} />
+            <OutlineTree />
             <div
               className={`sidebar-resizer${resizing ? ' dragging' : ''}`}
               onMouseDown={() => setResizing(true)}
@@ -368,19 +388,25 @@ export function App() {
           <BlockFlow onScrolledChange={setScrolled} />
         ) : (
           <div className="column-wrap">
-            <EmptyState
-              onImportText={doImportText}
-              onImportJson={doImportJson}
-            />
+            <StartPage />
           </div>
         )}
       </div>
-      {importOpen && (
-        <ImportModal onImportText={doImportText} onImportJson={doImportJson} />
+      {dropping && (
+        <div className="drop-overlay" aria-hidden="true">
+          <div className="drop-card">{data ? '松开：图片插进文稿，其他文件打开为新文稿' : '松开即可打开为新文稿'}</div>
+        </div>
       )}
+      {importOpen && <ImportModal />}
       {settingsOpen && <SettingsPanel />}
       {suggestionsOpen && <SuggestionsPanel />}
+      {flavorOpen && data && <FlavorPanel />}
       {helpOpen && <HelpOverlay />}
+      {briefOpen && data && <BriefModal />}
+      {outlineProposal && data && <OutlineProposalModal proposal={outlineProposal} />}
+      {agentOpen && data && <AgentAccessModal />}
+      {publishOpen && data && <PublishModal />}
+      <AccessRequestDialog />
       <Toasts />
     </div>
   )

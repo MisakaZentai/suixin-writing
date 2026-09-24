@@ -1,4 +1,5 @@
 /** 帮助浮层：快捷键总表（spec §6.3 完整映射） */
+import { isTauri } from '../lib/platform'
 import { useUIStore } from '../store/uiStore'
 import { IconX } from './icons'
 
@@ -9,41 +10,71 @@ interface Group {
 
 const GROUPS: Group[] = [
   {
-    title: '粒度与导航',
+    title: '选择',
     rows: [
-      ['1 / 2 / 3', '句子 / 段落 / 全文粒度'],
-      ['↑ / ↓', '上一块 / 下一块（最短距离露出）'],
-      ['点击块', '选中（active）并显示浮动操作条'],
+      ['点击 / ↑ ↓', '选中一段或一个标题'],
+      ['Shift+点击 / Shift+↑ ↓', '连续选中多段'],
+      ['鼠标划选', '选中段内的一段文字'],
+      ['Esc', '逐层退出（关闭 → 取消选区 → 取消选中）'],
     ],
   },
   {
-    title: '块级操作',
+    title: '写作',
     rows: [
-      ['E', '编辑当前块（Esc 取消 · Ctrl+Enter 确认）'],
-      ['R', '提意见（自然语言指令 → AI 产出 diff）'],
-      ['T', 'AI 重写（保持原意）'],
-      ['Esc', '中断 AI 流式生成'],
+      ['E / Enter / 双击', '编辑（双击时光标落在点击处）'],
+      ['Enter · Shift+Enter', '分段 · 段内换行'],
+      ['段首 Backspace', '与上一段合并'],
+      ['段首 ↑ · 段尾 ↓', '跨段继续编辑'],
+      ['## 空格', '段落开头输入即转为标题'],
+      ['Esc / 点击别处', '完成编辑'],
     ],
   },
   {
-    title: '内联 diff 确认',
+    title: 'Markdown（编辑时选中文字）',
     rows: [
-      ['Tab', '在变更簇间跳转'],
-      ['Y / N', '接受 / 拒绝当前簇'],
+      ['Ctrl+B · Ctrl+I', '加粗 · 斜体（再按一次取消）'],
+      ['Ctrl+Shift+X · Ctrl+E', '删除线 · 行内代码'],
+      ['Ctrl+K', '链接（选中地址直接输入）'],
+      ['选中文字', '浮出格式栏：还有列表、有序列表、引用'],
+    ],
+  },
+  {
+    title: 'AI',
+    rows: [
+      ['空格 或 /', '对选中的内容唤起 AI'],
+      ['直接回车', '润色（不写要求时）'],
+      ['快捷指令', '精简 · 扩写 · 更口语 · 更正式 · 续写'],
+      ['Esc', '生成中：中断'],
+    ],
+  },
+  {
+    title: '确认 AI 的修改',
+    rows: [
+      ['Tab / Shift+Tab', '在改动之间跳转'],
+      ['Y / N', '接受 / 拒绝当前这处'],
       ['Enter', '全部接受'],
       ['Esc', '全部拒绝'],
     ],
   },
   {
-    title: '工程',
+    title: '文件',
     rows: [
-      ['Ctrl+S', '导出工程 JSON（自描述存档）'],
-      ['Ctrl+Shift+S', '导出 Markdown'],
-      ['Ctrl+Z / Ctrl+Shift+Z', '撤销 / 重做'],
-      ['Ctrl+V', '空文档时直接粘贴导入'],
-      ['?', '打开本帮助'],
+      ['Ctrl+N · Ctrl+O', '新建 · 打开'],
+      ['Ctrl+S', '保存（文稿随时自动保存）'],
+      ['Ctrl+Shift+S', '另存为'],
+      ['Ctrl+Shift+E', '导出 Markdown'],
+      ['Ctrl+Z · Ctrl+Y', '撤销 · 重做'],
     ],
   },
+  // 浏览器版用浏览器自己的缩放
+  ...(isTauri
+    ? [
+        {
+          title: '界面',
+          rows: [['Ctrl+= · Ctrl+- · Ctrl+0', '放大 · 缩小 · 还原']] as [string, string][],
+        },
+      ]
+    : []),
 ]
 
 export function HelpOverlay() {
@@ -108,8 +139,8 @@ export function HelpOverlay() {
             lineHeight: 1.8,
           }}
         >
-          设计原则：AI 永不直接改写正文——每一次产出都以内联 diff
-          呈现，逐处确认后才写入版本历史。作者主权高于一切。
+          AI 从不直接改动正文：每一次产出都先以对照形式呈现，由你逐处确认后才写入，
+          并记入这一段的版本历史，随时可以恢复。
         </p>
       </div>
     </div>

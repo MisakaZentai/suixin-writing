@@ -12,25 +12,29 @@
 
   /* 文字层级 */
   --text-primary: #1d1d1f;
-  --text-secondary: #6e6e73;
-  --text-tertiary: #86868b;
+  /* 次要 / 三级文字都要在纸色与卡片上达到 WCAG AA（≥ 4.5:1） */
+  --text-secondary: #5f5f64;
+  --text-tertiary: #6e6e73;
   --text-on-accent: #ffffff;
 
   /* 强调色（全应用唯一 accent） */
-  --accent: #0071e3;
-  --accent-hover: #0077ed;
-  --accent-pressed: #006edb;
+  --accent: #0066cc;
+  --accent-hover: #0071e3;
+  --accent-pressed: #005bb5;
 
   /* 语义色 */
   --success: #34c759;
-  --danger: #ff3b30;
+  --success-text: #1a7f37;
+  --danger: #d70015;
   --warning: #ff9500;
+  --warning-text: #9a5200;
 
   /* diff 专用 */
   --diff-del-bg: #fee2e2;
   --diff-del-text: #991b1b;
   --diff-ins-bg: #dcfce7;
   --diff-ins-text: #166534;
+  --diff-ins-line: #22a355;
   --diff-cluster-focus-ring: rgba(0, 113, 227, 0.35);
 
   /* 分隔线 */
@@ -40,6 +44,7 @@
   /* 字体 */
   --font-ui: -apple-system, "SF Pro Text", "PingFang SC", "Segoe UI Variable",
     "Microsoft YaHei UI", sans-serif;
+  /* 正文默认用内置的思源宋体（fonts.css），不依赖系统是否装了衬线中文字体 */
   --font-body: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "SimSun",
     serif;
   --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", monospace;
@@ -49,7 +54,8 @@
   --text-small: 12px;
   --text-ui: 13px;
   --text-ui-lg: 15px;
-  --text-body: 17px;
+  /* 正文随窗口变大：1440px 宽时 17px，2K 全屏约 22px（设置里可固定字号） */
+  --text-body: clamp(17px, 10.6px + 0.446vw, 22px);
   --text-title: 20px;
 
   /* 间距（4px 基准） */
@@ -91,10 +97,13 @@
   --bg-selected: rgba(10, 132, 255, 0.14);
 
   --text-primary: #f5f5f7;
-  --text-secondary: #98989d;
-  --text-tertiary: #636366;
+  --text-secondary: #aeaeb2;
+  --text-tertiary: #98989d;
 
   --accent: #0a84ff;
+  --danger: #ff6961;
+  --success-text: #30d158;
+  --warning-text: #ffb340;
   --accent-hover: #1a8fff;
   --accent-pressed: #0077ed;
 
@@ -102,6 +111,7 @@
   --diff-del-text: #ff6961;
   --diff-ins-bg: rgba(48, 209, 88, 0.16);
   --diff-ins-text: #63e68b;
+  --diff-ins-line: #30d158;
 
   --separator: rgba(255, 255, 255, 0.1);
   --separator-strong: rgba(255, 255, 255, 0.16);
@@ -122,4 +132,37 @@
     --dur-base: 1ms;
     --dur-slow: 1ms;
   }
+}
+
+/* 正文字体可选：宋体（内置）/ 黑体 / 楷体（后两者用系统字体） */
+/* 正文字号（设置 → 正文字号） */
+[data-text-size="s"] {
+  --text-body: 16px;
+}
+[data-text-size="m"] {
+  --text-body: 18px;
+}
+[data-text-size="l"] {
+  --text-body: 20px;
+}
+[data-text-size="xl"] {
+  --text-body: 22px;
+}
+/* 正文列宽度：每行大约多少字（设置 → 正文宽度） */
+:root {
+  --measure: 40;
+}
+[data-measure="wide"] {
+  --measure: 52;
+}
+[data-measure="full"] {
+  --measure: 1000;
+}
+
+[data-font="sans"] {
+  --font-body: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans SC",
+    "Hiragino Sans GB", sans-serif;
+}
+[data-font="kai"] {
+  --font-body: "LXGW WenKai", "KaiTi", "STKaiti", "Kaiti SC", "Noto Serif SC", serif;
 }

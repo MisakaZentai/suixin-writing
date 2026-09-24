@@ -3,3 +3,8 @@ dist/
 src-tauri/target/
 *.log
 .DS_Store
+test-results/
+playwright-report/
+dist-cli/
+src-tauri/gen/
+.claude/scheduled_tasks.lock

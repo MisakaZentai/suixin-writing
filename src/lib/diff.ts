@@ -1,27 +1,57 @@
 /**
- * 文本 diff（spec §7：diff-match-patch，字符级）。
- * 输出统一为 keep/del/ins 操作流，并按“变更簇”分组（spec F4 / design §5.5）：
- * 相邻的改动聚为一簇，间隔过短的 keep 序列视为同一簇，避免簇过于碎裂。
+ * 文本对照：按"词"比较（Intl.Segmenter 分词后交给 diff-match-patch），
+ * 再按分句把相邻的改动聚成一"处"——既不会把一个词拆成红绿碎片，
+ * 也不会让一整段只剩一处"全部重写"。
  */
 import DiffMatchPatch from 'diff-match-patch'
 import type { DiffOp } from '../types'
 
-export interface DiffCluster {
-  id: number
-  /** 该簇在 ops 流中的下标 */
-  opIndices: number[]
-  /** 簇内改动操作（del/ins），按原顺序 */
-  ops: DiffOp[]
+const dmp = new DiffMatchPatch()
+dmp.Diff_Timeout = 1
+
+const wordSegmenter =
+  typeof Intl !== 'undefined' && 'Segmenter' in Intl
+    ? new Intl.Segmenter('zh', { granularity: 'word' })
+    : null
+
+function tokenize(text: string): string[] {
+  if (!wordSegmenter) return Array.from(text)
+  const out: string[] = []
+  for (const part of wordSegmenter.segment(text)) out.push(part.segment)
+  return out
 }
 
-const dmp = new DiffMatchPatch()
-dmp.Diff_Timeout = 2 // 超限则用次优解，保证 <200ms（spec §8）
-
-/** 计算字符级 diff 操作流 */
+/** 计算 old → new 的操作流（按词对齐，语义清理后合并同类项） */
 export function computeDiff(oldText: string, newText: string): DiffOp[] {
-  if (oldText === newText) return [{ op: 'keep', text: oldText }]
-  const raw = dmp.diff_main(oldText, newText)
-  dmp.diff_cleanupSemantic(raw)
+  if (oldText === newText) return oldText ? [{ op: 'keep', text: oldText }] : []
+  const vocab = new Map<string, number>()
+  const tokens: string[] = []
+  const encode = (text: string): string | null => {
+    let out = ''
+    for (const t of tokenize(text)) {
+      let code = vocab.get(t)
+      if (code === undefined) {
+        code = tokens.length
+        // 超过 BMP 可编码的词表：退回字符级
+        if (code >= 0xd800) return null
+        tokens.push(t)
+        vocab.set(t, code)
+      }
+      out += String.fromCharCode(code)
+    }
+    return out
+  }
+  const a = encode(oldText)
+  const b = a === null ? null : encode(newText)
+  let raw: [number, string][]
+  if (a !== null && b !== null) {
+    raw = dmp
+      .diff_main(a, b, false)
+      .map(([op, enc]) => [op, Array.from(enc, (ch) => tokens[ch.charCodeAt(0)]).join('')])
+  } else {
+    raw = dmp.diff_main(oldText, newText)
+  }
+  dmp.diff_cleanupSemantic(raw as DiffMatchPatch.Diff[])
   const ops: DiffOp[] = []
   for (const [op, text] of raw) {
     if (!text) continue
@@ -33,71 +63,72 @@ export function computeDiff(oldText: string, newText: string): DiffOp[] {
   return ops
 }
 
-/** 是否“相邻到值得合并”：间隔 ≤ 2 个字符的改动视为同一处 */
-const CLUSTER_GAP = 2
+/** 一"处"改动：ops 中 [start, end] 闭区间，两端必是改动，中间可夹短的未改文字 */
+export interface DiffCluster {
+  id: number
+  start: number
+  end: number
+}
+
+/** 两处改动之间的未改文字足够短、且不跨分句时，视为同一处 */
+const BOUNDARY = /[，。！？；：、,.!?;:\n]/
+const MAX_GAP = 6
 
 export function clusterize(ops: DiffOp[]): DiffCluster[] {
   const clusters: DiffCluster[] = []
   let current: DiffCluster | null = null
-  let keepRun = 0
+  let gap = ''
   ops.forEach((op, i) => {
     if (op.op === 'keep') {
-      if (current) {
-        keepRun += op.text.length
-        if (keepRun > CLUSTER_GAP) current = null
-      }
+      if (current) gap += op.text
       return
     }
-    if (!current) {
-      current = { id: clusters.length, opIndices: [], ops: [] }
+    if (current && gap.length <= MAX_GAP && !BOUNDARY.test(gap)) {
+      current.end = i
+    } else {
+      current = { id: clusters.length, start: i, end: i }
       clusters.push(current)
-      keepRun = 0
     }
-    current.opIndices.push(i)
-    current.ops.push(op)
+    gap = ''
   })
   return clusters
 }
 
+/** 第 i 个操作属于哪一处（不在任何一处时返回 -1） */
+export function clusterIndexOf(clusters: DiffCluster[], opIndex: number): number {
+  return clusters.findIndex((c) => opIndex >= c.start && opIndex <= c.end)
+}
+
 /**
- * 按每簇的接受/拒绝决策还原最终文本。
- * 接受：保留 ins、丢弃 del；拒绝：保留 del、丢弃 ins。
+ * 按每一处的裁决还原最终文本。未裁决的按"接受"处理。
+ * 接受：保留新增、去掉删除；拒绝：保留删除、去掉新增。
  */
-export function applyDecisions(
-  ops: DiffOp[],
-  decisions: boolean[] | undefined
-): string {
+export function applyDecisions(ops: DiffOp[], decisions: (boolean | undefined)[]): string {
   const clusters = clusterize(ops)
-  const acceptedSet = new Set<number>()
-  clusters.forEach((c, i) => {
-    if (!decisions || decisions[i] === undefined) acceptedSet.add(c.id) // 默认接受（全部接受路径）
-    else if (decisions[i]) acceptedSet.add(c.id)
-  })
   let out = ''
   ops.forEach((op, i) => {
     if (op.op === 'keep') {
       out += op.text
       return
     }
-    const cluster = clusters.find((c) => c.opIndices.includes(i))
-    const accepted = cluster ? acceptedSet.has(cluster.id) : true
+    const c = clusterIndexOf(clusters, i)
+    const accepted = decisions[c] !== false
     if (op.op === 'ins' && accepted) out += op.text
     if (op.op === 'del' && !accepted) out += op.text
   })
   return out
 }
 
-/** 提取纯“新增预览文本”（用于侧栏/待办展示） */
-export function diffNewText(ops: DiffOp[]): string {
-  return ops
-    .filter((o) => o.op !== 'del')
-    .map((o) => o.text)
-    .join('')
+/** 改动比例：改动字数 / 前后总字数。超过一半视为"整体重写" */
+export function changeRatio(ops: DiffOp[]): number {
+  let changed = 0
+  let total = 0
+  for (const op of ops) {
+    const n = op.text.length
+    total += op.op === 'keep' ? 2 * n : n
+    if (op.op !== 'keep') changed += n
+  }
+  return total ? changed / total : 0
 }
 
-/** 变化字数（用于判断 AI 是否真的做了改动） */
-export function diffChangedCount(ops: DiffOp[]): number {
-  return ops
-    .filter((o) => o.op !== 'keep')
-    .reduce((n, o) => n + o.text.length, 0)
-}
+export const WHOLE_REWRITE_RATIO = 0.5

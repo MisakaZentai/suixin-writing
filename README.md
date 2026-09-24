@@ -1,76 +1,76 @@
-# 随心写作（AI Writer）— 块级 AI 协作写作
+# 随心写作
 
-> 导入 → 拆块 → 点选块 → 改（手动 / 提意见 / AI 重写）→ 内联 diff 确认 → 导出
->
-> 设计铁律：**作者主权（AI 永不直接改写正文，一切 AI 产出走内联 diff 由人确认）**、手感优先、状态可移植、本地优先。
+**写作与改稿的桌面应用。AI 和 agent 只提修改建议，改不改，由你一处一处定。**
 
-桌面应用：Tauri 2（Rust 壳）+ React 18 + TypeScript + Vite + Zustand + Immer + diff-match-patch。
-详见 [spec.md](./spec.md)（产品与技术规格）与 [design.md](./design.md)（前端设计方案）。
+![Tauri 2](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white) ![React 18](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black) ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white) ![MCP](https://img.shields.io/badge/MCP-%E6%94%AF%E6%8C%81-6384ff) ![本地优先](https://img.shields.io/badge/%E6%95%B0%E6%8D%AE-%E5%AD%98%E5%9C%A8%E6%9C%AC%E6%9C%BA-2f9e44)
+
+![Claude 提的修改在对照里等你确认；AI 味面板指出它只是把「不是…而是…」换了个说法，还多了一个破折号](docs/images/review.png)
+
+选中一段、一句或一节，让 AI 润色、精简、扩写或续写。改出来的东西不会直接落进正文：每一处都先摆在原文旁边，接受哪处、放弃哪处由你挑，接受的内容记进这一段的版本历史。Claude Code、Codex 这类 agent 也能打开同一篇稿子提修改，走的是同一套确认流程。
+
+## 能做什么
+
+- **逐处确认**：修改以对照呈现，小改动逐处裁决，大改动整体比较；不满意就再来一版，几版之间左右切换。
+- **agent 协作**：`suixin` 命令行和 MCP 服务让 agent 读写文稿。默认只能提署名建议；App 开着时，建议当场出现在你眼前，你也可以选中一段「交给 Agent」。
+- **AI 味检查**：标出「不是…而是…」、破折号这类套路，附上原因和改法。「去 AI 味」只改命中的地方，改完再自查一遍。拿你自己的旧作建立基线，你惯用的写法就不算毛病。
+- **大纲即正文**：标题就写在正文里，大纲由标题生成，拖动大纲节点可以移动整节。
+- **图片与发布**：粘贴、拖入即插图；导出 HTML、Markdown、PDF；生成知乎发布包，在写文章页一键填进草稿，发布按钮留给你自己按。
+- **本地优先**：文稿自动保存在本机，API Key 存系统安全区。内置 DeepSeek、通义千问、Kimi、智谱、OpenAI，也可以填自己的接口。
+- **Markdown 模式**：加粗、列表、引用直接显示效果，编辑时标记变淡；选中文字会浮出格式栏，也可以用 Ctrl+B、Ctrl+I。
+
+![深色主题。右边是待办：agent 提的修改和检查建议，可以逐条或整组处理](docs/images/dark.png)
 
 ## 快速开始
 
-### 方式一：浏览器模式（无需 Rust，先跑起来）
+需要 Node.js 20 以上。桌面版另需 [Rust](https://www.rust-lang.org/tools/install)，Windows 上还要装 Visual Studio 的「使用 C++ 的桌面开发」组件。
 
 ```bash
 npm install
-npm run dev        # http://localhost:5173
+npm run tauri dev     # 桌面版
+npm run dev           # 只要浏览器版：http://localhost:5173
 ```
 
-浏览器模式下能力自动降级：文件选择用 `<input type=file>`、保存用浏览器下载、API Key 存 `localStorage`（仅开发用）、崩溃恢复存 `localStorage`。
+打包安装程序用 `npm run tauri build`。目前只在 Windows 11 上实机验证过，macOS 和 Linux 还没测。
 
-### 方式二：桌面模式（Tauri 2）
-
-需要本机安装 [Rust 工具链](https://www.rust-lang.org/tools/install)（stable ≥ 1.77）。
+## 让 agent 帮你改稿
 
 ```bash
-npm install
-npm run tauri dev      # 开发：壳 + 前端热更新
-npm run tauri build    # 打包安装包（nsis / msi）
+npm run build:cli && npm link          # 得到命令 suixin
+claude mcp add suixin -- suixin mcp    # Claude Code；Codex 用 codex mcp add suixin -- suixin mcp
 ```
 
-桌面模式下：文件对话框走原生、API Key 写入**系统安全区**（Windows Credential Manager / macOS Keychain / Linux Secret Service，见 `src-tauri/src/main.rs` 的 keyring 命令）、崩溃恢复写入应用数据目录。
+装好之后，直接跟 agent 说「帮我看看随心写作里正开着的这篇」就行。命令行也可以自己用：
 
-## 功能与规格对应
-
-| Spec | 能力 |
-| --- | --- |
-| §4 F1 | 导入 Markdown / TXT（粘贴、选文件、拖放），`#` 标题成大纲节点，超 20 万字截断并提示 |
-| §4 F2 | 句子级拆块（Intl.Segmenter），段落 / 全文为聚合视图；粒度切换 `1/2/3` |
-| §4 F3 | 块选中、浮动操作条：`E` 编辑 / `R` AI 重写 / `T` 提意见 |
-| §4 F4 | AI 流式产出 → 内联 diff 逐簇确认（`Tab` 切换、`Y/N` 裁决、`Enter` 全收、`Esc` 全拒） |
-| §4 F5 | 大纲树 ↔ 块双向定位（点击大纲定位呼吸高亮，选中块反高亮大纲） |
-| §4 F6 | 30s 自动保存 + 关闭时保存，重开提示恢复 |
-| §4 F7 | 导出 Markdown / 工程 JSON（含大纲、待办、版本历史） |
-
-## 快捷键
-
-按 `?` 查看应用内完整快捷键表。
-
-- 粒度：`1` 句 / `2` 段 / `3` 篇；导航：`↑` / `↓`
-- 块级：`E` 编辑 / `R` AI 重写 / `T` 提意见（编辑中 `Ctrl+Enter` 确认、`Esc` 取消）
-- diff 确认：`Tab`/`Shift+Tab` 换簇、`Y` 接受、`N` 拒绝、`Enter` 全部接受、`Esc` 全部拒绝
-- 工程：`Ctrl+S` 导工程 JSON、`Ctrl+Shift+S` 导 Markdown、`Ctrl+Z`/`Ctrl+Shift+Z` 撤销 / 重做
-
-## 目录结构
-
-```
-src/
-  lib/        纯逻辑：断句、导入解析、diff、AI 流式、工程 IO、平台抽象（platform.ts 双轨）
-  store/      Zustand + Immer：projectStore（文档/撤销重做）、uiStore（界面/浮层/待办）
-  components/ 12 个展示组件（Toolbar / OutlineTree / BlockFlow / BlockCard / DiffView / …）
-  styles/     设计系统：tokens（令牌）/ base / app / components
-src-tauri/    Tauri 壳：main.rs（keyring 三命令）、capabilities、图标（scripts/gen-icons.mjs 生成）
-scripts/     一次性工具脚本
+```bash
+suixin status                                          # App 开着吗，你在看哪篇、选中了什么
+suixin flavor @                                        # 这篇有多少 AI 味，套路都在哪
+suixin replace @ --quote "原文" --text "改后" --why "理由"   # 提一条修改，等你确认
 ```
 
-## 外部 agent 续作协议
+agent 想直接改正文、调整章节，得先在 App 里经你同意。完整用法见 `suixin guide`。
 
-工程 JSON 自描述，任何外部 agent 可接力处理：
+## 文档
 
-1. 读 `blocks[status=pending]` 与 `suggestions[state=pending]` 获得待办；
-2. 外部处理后，将 `suggestions[].state` 置为 `accepted/rejected`，并按结果更新 `blocks[].text`、追加 `versions`；
-3. 不认识的字段必须原样保留（forward-compatible）。
+- [使用说明](docs/使用说明.md)：快捷键、工程文件格式、命令行与实时协作的细节
+- [AI 味方案](docs/AI味方案.md)：规则从哪来、分数怎么算、怎么改
+- [产品规格](spec.md) · [界面设计](design.md) · [开发记录](docs/改进计划.md)
+
+## 开发
+
+Tauri 2（Rust）、React 18、TypeScript、Vite、Zustand。
+
+```bash
+npm run typecheck
+npm test          # 单元测试（Vitest）
+npm run e2e       # 端到端测试（Playwright；第一次先运行 npx playwright install chromium）
+```
 
 ## 许可证
 
 [MIT](LICENSE)
+
+---
+
+这份 README 是在随心写作里写的：Claude 通过实时通道把内容写进开着的 App，插截图、查 AI 味、导出 Markdown 都用的是 App 和 `suixin` 命令行。
+
+![写这份 README 时的 App：右边的 AI 味面板给它打了 0 分](docs/images/written-in-app.png)

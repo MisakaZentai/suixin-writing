@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "AI Writer",
+  "productName": "随心写作",
   "version": "0.1.0",
   "identifier": "com.aiwriter.app",
   "build": {
@@ -12,12 +12,13 @@
   "app": {
     "windows": [
       {
-        "title": "AI Writer — 块级协作写作",
+        "title": "随心写作",
         "width": 1200,
         "height": 800,
         "minWidth": 880,
         "minHeight": 560,
         "dragDropEnabled": true,
+        "zoomHotkeysEnabled": true,
         "center": true
       }
     ],
@@ -27,17 +28,25 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "msi"],
+    "targets": [
+      "nsis",
+      "msi"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.ico"
     ],
-    "publisher": "AI Writer",
+    "publisher": "随心写作",
     "copyright": "",
     "category": "Productivity",
-    "shortDescription": "块级 AI 协作写作",
-    "longDescription": "导入 → 拆块 → 点选块 → 改（手动 / 提意见 / AI 重写）→ 内联 diff 确认 → 导出。作者主权：AI 永不直接改写正文。"
+    "shortDescription": "写作与改稿，AI 只提建议，由你拍板",
+    "longDescription": "块级 AI 协作写作：选中一段或一句，让 AI 润色、精简、扩写或续写；所有修改先以对照形式呈现，逐处确认后才写入，并记入版本历史。本地优先，文稿自动保存。",
+    "windows": {
+      "wix": {
+        "language": "zh-CN"
+      }
+    }
   }
 }
