@@ -1,0 +1,23 @@
+{
+  "identifier": "default",
+  "description": "主窗口权限：文件读写（用户选择路径 + 应用数据目录）、系统对话框、keyring 机密存储",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:allow-open",
+    "dialog:allow-save",
+    "dialog:allow-message",
+    "dialog:allow-confirm",
+    {
+      "identifier": "fs:allow-read-text-file",
+      "allow": ["**"]
+    },
+    {
+      "identifier": "fs:allow-write-text-file",
+      "allow": ["**"]
+    },
+    { "identifier": "fs:allow-exists", "allow": ["**"] },
+    { "identifier": "fs:allow-mkdir", "allow": ["**"] },
+    { "identifier": "fs:allow-remove", "allow": ["**"] }
+  ]
+}

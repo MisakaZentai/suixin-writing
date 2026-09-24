@@ -1,0 +1,245 @@
+/* 基础重置与全局排版（design §2.2 / §6） */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font-ui);
+  font-size: var(--text-ui);
+  color: var(--text-primary);
+  background: var(--bg-canvas);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+
+/* 主题切换本身也是优雅过渡（design §7） */
+body,
+body * {
+  transition-property: background-color, border-color, color, fill, stroke;
+  transition-duration: 200ms;
+  transition-timing-function: var(--ease-out);
+}
+
+::selection {
+  background: rgba(0, 113, 227, 0.18);
+}
+
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-s);
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+input,
+textarea {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+/* 细滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.35);
+  border-radius: var(--radius-full);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(128, 128, 128, 0.55);
+  background-clip: content-box;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 正文排版（写作标准） */
+.prose {
+  font-family: var(--font-body);
+  font-size: var(--text-body);
+  line-height: 1.8;
+  letter-spacing: 0.01em;
+  color: var(--text-primary);
+  font-feature-settings: "kern", "liga";
+  hanging-punctuation: first allow-end;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.kbd {
+  font-family: var(--font-mono);
+  font-size: var(--text-caption);
+  color: var(--text-tertiary);
+  background: var(--bg-hover);
+  border-radius: 4px;
+  padding: 1px 5px;
+  line-height: 1.5;
+}
+
+/* 屏幕阅读器专用 */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* 通用按钮层级（design §5.1） */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: var(--radius-s);
+  font-size: var(--text-ui);
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background-color var(--dur-instant) var(--ease-out),
+    transform var(--dur-instant) var(--ease-out),
+    opacity var(--dur-instant) linear;
+}
+.btn:hover {
+  background-color: var(--bg-hover);
+}
+.btn:active {
+  transform: scale(0.97);
+}
+.btn-primary {
+  background: var(--accent);
+  color: var(--text-on-accent);
+}
+.btn-primary:hover {
+  background: var(--accent-hover);
+}
+.btn-primary:active {
+  background: var(--accent-pressed);
+}
+.btn-secondary {
+  background: var(--bg-elevated);
+  border: 1px solid var(--separator-strong);
+}
+.btn-plain {
+  padding: 0 8px;
+}
+.btn-danger {
+  color: var(--danger);
+}
+.btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+  transform: none;
+}
+
+/* 图标按钮（Plain 层级的圆形版本） */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-s);
+  color: var(--text-secondary);
+  transition: background-color var(--dur-instant) var(--ease-out),
+    color var(--dur-instant) var(--ease-out),
+    transform var(--dur-instant) var(--ease-out);
+}
+.icon-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.icon-btn:active {
+  transform: scale(0.94);
+}
+.icon-btn.active {
+  color: var(--accent);
+}
+.icon-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.icon-btn.pressed-echo {
+  animation: echo-press 100ms var(--ease-out);
+}
+@keyframes echo-press {
+  0% {
+    transform: scale(0.92);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* 输入控件 */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.field-label {
+  font-size: var(--text-small);
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+.input {
+  height: 32px;
+  padding: 0 10px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--separator-strong);
+  background: var(--bg-card);
+  font-size: var(--text-ui-lg);
+  transition: border-color var(--dur-instant) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+.input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--bg-selected);
+}
+.input::placeholder {
+  color: var(--text-tertiary);
+}
+.input.flash-ok {
+  animation: flash-ok 300ms var(--ease-out);
+}
+@keyframes flash-ok {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(52, 199, 89, 0);
+  }
+  40% {
+    box-shadow: 0 0 0 3px rgba(52, 199, 89, 0.35);
+  }
+}
