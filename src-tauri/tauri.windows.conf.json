@@ -1,0 +1,19 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "windows": [
+      {
+        "title": "随心写作",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 880,
+        "minHeight": 560,
+        "dragDropEnabled": true,
+        "zoomHotkeysEnabled": true,
+        "center": true,
+        "decorations": false,
+        "shadow": true
+      }
+    ]
+  }
+}

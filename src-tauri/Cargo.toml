@@ -1,8 +1,8 @@
 [package]
 name = "ai-writer"
 version = "0.1.0"
-description = "块级 AI 协作写作桌面应用"
-authors = ["AI Writer"]
+description = "随心写作——块级 AI 协作写作桌面应用"
+authors = ["随心写作"]
 license = "MIT"
 edition = "2021"
 rust-version = "1.77.2"
@@ -21,6 +21,9 @@ keyring = { version = "3", features = [
   "windows-native",
   "sync-secret-service",
 ] }
+tauri-plugin-http = "~2.6"
+tiny_http = "0.12"
+getrandom = "0.3"
 
 [features]
 # tauri build 时由 CLI 注入：custom-protocol 让 release 包从自定义协议服务前端资源

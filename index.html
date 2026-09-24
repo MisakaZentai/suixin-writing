@@ -3,23 +3,18 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AI Writer — 块级协作写作</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;500;700&display=swap"
-      rel="stylesheet"
-    />
+    <title>随心写作</title>
     <script>
-      // 首屏前确定主题，避免深浅闪烁。
-      // 注意：偏好存于 ai-writer:prefs（JSON），不是独立键。
+      // 首屏前确定主题与正文字体，避免闪烁。
+      // 注意：偏好存于 ai-writer:prefs（JSON，内部键名沿用旧名），不是独立键。
       ;(function () {
         var t = 'system'
+        var prefs = {}
         try {
-          t =
-            JSON.parse(localStorage.getItem('ai-writer:prefs') || '{}').theme ||
-            'system'
+          prefs = JSON.parse(localStorage.getItem('ai-writer:prefs') || '{}')
+          t = prefs.theme || 'system'
         } catch (e) {}
+        if (prefs.bodyFont) document.documentElement.setAttribute('data-font', prefs.bodyFont)
         var dark =
           t === 'dark' ||
           (t === 'system' &&

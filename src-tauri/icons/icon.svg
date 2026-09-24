@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- 应用图标源图：`npx tauri icon src-tauri/icons/icon.svg` 由它生成全部尺寸 -->
+  <rect width="1024" height="1024" rx="196" fill="#161920"/>
+  <rect x="244" y="244" width="332" height="76" fill="#e9ecf3"/>
+  <rect x="244" y="416" width="236" height="76" fill="#e9ecf3"/>
+  <rect x="244" y="588" width="76" height="76" fill="#6384ff"/>
+</svg>

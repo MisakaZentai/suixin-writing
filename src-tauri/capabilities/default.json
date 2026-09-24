@@ -1,23 +1,74 @@
 {
   "identifier": "default",
-  "description": "主窗口权限：文件读写（用户选择路径 + 应用数据目录）、系统对话框、keyring 机密存储",
-  "windows": ["main"],
+  "description": "主窗口权限：文件读写（用户选择路径 + 应用数据目录）、系统对话框、自绘标题栏的窗口按钮与拖动、keyring 机密存储、AI 接口请求（地址由作者在设置里填写，不能预先限定）",
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-internal-toggle-maximize",
+    "core:window:allow-is-maximized",
+    "core:window:allow-close",
+    "core:window:allow-start-dragging",
+    "core:webview:allow-set-webview-zoom",
     "dialog:allow-open",
     "dialog:allow-save",
     "dialog:allow-message",
     "dialog:allow-confirm",
     {
       "identifier": "fs:allow-read-text-file",
-      "allow": ["**"]
+      "allow": [
+        "**"
+      ]
     },
     {
       "identifier": "fs:allow-write-text-file",
-      "allow": ["**"]
+      "allow": [
+        "**"
+      ]
     },
-    { "identifier": "fs:allow-exists", "allow": ["**"] },
-    { "identifier": "fs:allow-mkdir", "allow": ["**"] },
-    { "identifier": "fs:allow-remove", "allow": ["**"] }
+    {
+      "identifier": "fs:allow-read-file",
+      "allow": [
+        "**"
+      ]
+    },
+    {
+      "identifier": "fs:allow-write-file",
+      "allow": [
+        "**"
+      ]
+    },
+    {
+      "identifier": "fs:allow-exists",
+      "allow": [
+        "**"
+      ]
+    },
+    {
+      "identifier": "fs:allow-mkdir",
+      "allow": [
+        "**"
+      ]
+    },
+    {
+      "identifier": "fs:allow-remove",
+      "allow": [
+        "**"
+      ]
+    },
+    {
+      "identifier": "http:default",
+      "allow": [
+        {
+          "url": "https://*:*"
+        },
+        {
+          "url": "http://*:*"
+        }
+      ]
+    }
   ]
 }

@@ -34,14 +34,24 @@
   opacity: 1;
 }
 .toolbar-title {
-  font-size: var(--text-title);
+  font-family: var(--font-body);
+  font-size: var(--text-ui-lg);
   font-weight: 700;
-  letter-spacing: 0.01em;
+  letter-spacing: 0.04em;
   white-space: nowrap;
+  padding: 3px 6px;
+  border-radius: var(--radius-s);
+}
+.toolbar-title:not(:disabled):hover {
+  background: var(--bg-hover);
+}
+.toolbar-title:disabled {
+  cursor: default;
 }
 .toolbar-doc-title {
-  min-width: 60px;
-  max-width: 260px;
+  field-sizing: content;
+  min-width: 4em;
+  max-width: 320px;
   border: none;
   background: transparent;
   font-size: var(--text-ui-lg);
@@ -76,6 +86,7 @@
 /* 待办徽标 */
 .badge {
   position: absolute;
+  pointer-events: none; /* 点在角标上也算点按钮 */
   top: 2px;
   right: 2px;
   min-width: 14px;
@@ -162,13 +173,23 @@
   scroll-behavior: auto; /* JS 自定义平滑滚动 */
 }
 .column {
-  max-width: 720px;
+  /* 宽度跟着字号走：每行约 --measure 个字，大屏上不会缩在中间一小条 */
+  max-width: calc(var(--text-body) * var(--measure) + 2 * var(--sp-8));
   margin: 0 auto;
   padding: var(--sp-12) var(--sp-8) 30vh;
 }
 .column-wrap.focus-mode {
   display: flex;
   justify-content: center;
+}
+/* 右侧开着待办 / AI 味面板：正文列让出位置，确认条上的按钮不被面板挡住（窗口太窄时仍叠在上面） */
+@media (min-width: 1100px) {
+  .column-wrap {
+    transition: padding-right var(--dur-base) var(--ease-out);
+  }
+  .app.with-side-panel .column-wrap {
+    padding-right: calc(340px + var(--sp-4));
+  }
 }
 
 /* 空状态稿纸位置 */
@@ -178,4 +199,60 @@
   align-items: center;
   justify-content: center;
   padding: var(--sp-8);
+}
+
+/* ── 自绘标题栏（Windows 桌面版） ─────────────────────
+   顶栏兼作标题栏：右端让出窗口按钮的位置；窗口按钮浮在所有浮层之上，
+   右侧滑入的设置面板从顶栏下方开始，免得和窗口按钮挤在一起 */
+:root {
+  --titlebar-controls: 138px;
+}
+html.custom-titlebar .toolbar {
+  padding-right: calc(var(--titlebar-controls) + var(--sp-2));
+  user-select: none;
+  -webkit-user-select: none;
+}
+html.custom-titlebar .settings-panel {
+  top: 48px;
+  border-top-left-radius: var(--radius-l);
+}
+.window-controls {
+  position: fixed;
+  top: 0;
+  right: 0;
+  z-index: 400;
+  display: flex;
+  height: 48px;
+}
+.window-btn {
+  width: 46px;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  transition:
+    background-color 120ms var(--ease-out),
+    color 120ms var(--ease-out);
+}
+.window-btn svg {
+  shape-rendering: geometricPrecision;
+}
+.window-btn:hover {
+  background: rgba(127, 127, 127, 0.14);
+  color: var(--text-primary);
+}
+.window-btn:active {
+  background: rgba(127, 127, 127, 0.22);
+}
+.window-btn.close:hover {
+  background: #c42b1c;
+  color: #fff;
+}
+.window-btn.close:active {
+  background: #b22a1b;
+  color: rgba(255, 255, 255, 0.85);
 }
