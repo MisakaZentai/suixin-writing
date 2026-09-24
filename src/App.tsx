@@ -17,7 +17,7 @@ import { HelpOverlay } from './components/HelpOverlay'
 import { Toasts } from './components/Toasts'
 import { useShortcuts } from './hooks/useShortcuts'
 import { useProjectStore } from './store/projectStore'
-import { useUIStore } from './store/uiStore'
+import { applyTheme, useUIStore } from './store/uiStore'
 import { loadRecovery, saveRecovery, saveTextFile } from './lib/platform'
 import {
   buildProjectJson,
@@ -43,17 +43,11 @@ export function App() {
   /* ── 主题 ─────────────────────────────────────────── */
   useEffect(() => {
     const mq = window.matchMedia('(prefers-color-scheme: dark)')
-    const apply = () => {
-      const dark =
-        theme === 'dark' || (theme === 'system' && mq.matches)
-      document.documentElement.setAttribute(
-        'data-theme',
-        dark ? 'dark' : 'light'
-      )
-    }
-    apply()
-    mq.addEventListener('change', apply)
-    return () => mq.removeEventListener('change', apply)
+    // 首帧不播过渡；系统主题切换时播放 200ms 色彩过渡
+    applyTheme(theme, false)
+    const onChange = () => applyTheme(theme, true)
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
   }, [theme])
 
   /* ── 启动：Key 状态 + 恢复提示 ─────────────────────── */
@@ -224,12 +218,14 @@ export function App() {
         return
       }
 
-      /* Esc：diff 全拒 > 中断生成 > 逐层关面板 / 退出编辑 */
+      /* Esc：diff 全拒 > 中断生成 > 右键菜单 > 逐层关面板 / 退出编辑 */
       if (e.key === 'Escape') {
         if (ui.diff) {
           ui.decideAll(false)
         } else if (ui.stream) {
           ui.abortAI()
+        } else if (ui.contextMenu) {
+          ui.setContextMenu(null)
         } else if (ui.settingsOpen) {
           ui.setSettingsOpen(false)
         } else if (ui.suggestionsOpen) {
@@ -270,6 +266,7 @@ export function App() {
         ui.settingsOpen ||
         ui.helpOpen ||
         ui.importOpen ||
+        ui.contextMenu ||
         ui.editing ||
         ui.opinion ||
         ui.stream
@@ -304,15 +301,20 @@ export function App() {
         const container = el?.closest<HTMLElement>('.column-wrap')
         if (el && container) revealBlock(container, el)
       }
-      /* 块级操作 E/R/T */
+      /* 块级操作 E/R/T：先给操作条按钮一次 pressed 回声（design §6） */
       else if ((e.key === 'e' || e.key === 'E') && ui.activeKey) {
         const block = getDisplayBlocks(data, ui.granularity).find(
           (b) => b.key === ui.activeKey
         )
-        if (block) ui.beginEdit(block.key, block.text)
+        if (block) {
+          ui.echoKey('e')
+          ui.beginEdit(block.key, block.text)
+        }
       } else if ((e.key === 'r' || e.key === 'R') && ui.activeKey) {
+        ui.echoKey('r')
         ui.beginOpinion(ui.activeKey)
       } else if ((e.key === 't' || e.key === 'T') && ui.activeKey) {
+        ui.echoKey('t')
         void ui.startRewrite(ui.activeKey)
       }
       /* 帮助 */

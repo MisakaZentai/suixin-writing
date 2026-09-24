@@ -2,6 +2,9 @@
  * 块卡片 — 应用的心脏（design §5.3）。
  * 三态流转（阅读 ↔ 编辑 ↔ diff）用同一容器连续形变表达；
  * 浮动操作条 / 提意见 / 打字机 / 内联 diff 全部就地呈现。
+ *
+ * 性能纪律：所有 store 订阅都是字段级 selector——编辑/流式/diff 状态
+ * 变化只重渲染涉及的块，而不是整个块流。
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { DisplayBlock } from '../types'
@@ -22,7 +25,8 @@ import { flattenOutline } from '../lib/project'
 interface Props {
   block: DisplayBlock
   prevBlock: DisplayBlock | null
-  active: boolean
+  /** 入场 cascade 延迟（ms），粒度切换/导入时由块流按序号下发 */
+  enterDelay?: number
 }
 
 const SOURCE_LABEL: Record<string, string> = {
@@ -34,27 +38,47 @@ const SOURCE_LABEL: Record<string, string> = {
   split: '拆分',
 }
 
-export function BlockCard({ block, prevBlock, active }: Props) {
-  const data = useProjectStore((s) => s.data)
-  const ui = useUIStore()
-  const editing = ui.editing?.key === block.key ? ui.editing : null
-  const opinion = ui.opinion?.key === block.key ? ui.opinion : null
-  const stream = ui.stream?.key === block.key ? ui.stream : null
-
-  const pendingSuggestion = data?.suggestions.find(
-    (s) =>
-      s.state === 'pending' &&
-      s.kind === 'ai_diff' &&
-      block.blockIds.includes(s.blockId)
+export function BlockCard({ block, prevBlock, enterDelay = 0 }: Props) {
+  /* ── 字段级订阅：任何状态变化只影响相关块 ───────────── */
+  const active = useUIStore((s) => s.activeKey === block.key)
+  const editing = useUIStore((s) =>
+    s.editing?.key === block.key ? s.editing : null
   )
-  const diffSuggestion =
-    ui.diff && data
-      ? data.suggestions.find((s) => s.id === ui.diff!.suggestionId)
-      : undefined
-  const showDiff =
-    ui.diff != null &&
-    diffSuggestion != null &&
-    block.blockIds.includes(diffSuggestion.blockId)
+  const opinion = useUIStore((s) =>
+    s.opinion?.key === block.key ? s.opinion : null
+  )
+  const stream = useUIStore((s) =>
+    s.stream?.key === block.key ? s.stream : null
+  )
+  const diff = useUIStore((s) => {
+    const d = s.diff
+    if (!d) return null
+    const sg = useProjectStore
+      .getState()
+      .data?.suggestions.find((x) => x.id === d.suggestionId)
+    return sg && block.blockIds.includes(sg.blockId) ? d : null
+  })
+  const versionPanelOpen = useUIStore((s) => s.versionPanelKey === block.key)
+  const keyEcho = useUIStore((s) =>
+    s.activeKey === block.key ? s.keyEcho : null
+  )
+  const menu = useUIStore((s) =>
+    s.contextMenu?.key === block.key ? s.contextMenu : null
+  )
+  const pendingSuggestion = useProjectStore(
+    (s) =>
+      s.data?.suggestions.find(
+        (sg) =>
+          sg.state === 'pending' &&
+          sg.kind === 'ai_diff' &&
+          block.blockIds.includes(sg.blockId)
+      ) ?? null
+  )
+  const diffSuggestion = useProjectStore((s) =>
+    diff ? s.data?.suggestions.find((sg) => sg.id === diff.suggestionId) : undefined
+  )
+
+  const showDiff = diff != null && diffSuggestion != null
 
   const mode = editing
     ? 'edit'
@@ -65,15 +89,16 @@ export function BlockCard({ block, prevBlock, active }: Props) {
         : opinion
           ? 'opinion'
           : 'read'
-  const { ref, ghost } = useHeightMorph<HTMLDivElement>(mode)
+  const { ref: morphRef, ghost } = useHeightMorph<HTMLDivElement>(mode)
 
-  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
-  const [pickerOpen, setPickerOpen] = useState(false)
-  const versionPanelOpen = ui.versionPanelKey === block.key
+  const rootRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const opinionRef = useRef<HTMLTextAreaElement>(null)
+  const versionRef = useRef<HTMLDivElement>(null)
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [toolbarBelow, setToolbarBelow] = useState(false)
 
-  /* 进入编辑/意见态后聚焦 */
+  /* 进入编辑/意见态后聚焦（等高度形变结束，避免动画中抢滚动） */
   useEffect(() => {
     if (editing) {
       const t = window.setTimeout(() => {
@@ -103,30 +128,65 @@ export function BlockCard({ block, prevBlock, active }: Props) {
     el.style.height = `${Math.min(160, el.scrollHeight)}px`
   }, [opinion?.draft])
 
-  /* 关闭菜单 */
+  /* 右键菜单：点击菜单外任意处关闭（Esc 由全局快捷键处理） */
   useEffect(() => {
     if (!menu) return
-    const close = () => setMenu(null)
-    window.addEventListener('mousedown', close)
-    window.addEventListener('keydown', close)
-    return () => {
-      window.removeEventListener('mousedown', close)
-      window.removeEventListener('keydown', close)
+    const close = (e: MouseEvent) => {
+      if ((e.target as HTMLElement | null)?.closest('.context-menu')) return
+      useUIStore.getState().setContextMenu(null)
     }
+    window.addEventListener('mousedown', close)
+    return () => window.removeEventListener('mousedown', close)
   }, [menu])
+
+  /* 版本历史 popover：点击外部关闭 */
+  useEffect(() => {
+    if (!versionPanelOpen) return
+    const close = (e: MouseEvent) => {
+      if (versionRef.current?.contains(e.target as Node)) return
+      useUIStore.getState().setVersionPanelKey(null)
+    }
+    window.addEventListener('mousedown', close)
+    return () => window.removeEventListener('mousedown', close)
+  }, [versionPanelOpen])
+
+  /* 浮动操作条视口顶部防裁剪：块顶距顶栏不足时下翻到块下方 */
+  useEffect(() => {
+    if (!active || mode !== 'read') return
+    let ticking = false
+    const check = () => {
+      ticking = false
+      const el = rootRef.current
+      if (!el) return
+      // 48 顶栏 + 操作条约 40 + 余量
+      setToolbarBelow(el.getBoundingClientRect().top < 96)
+    }
+    check()
+    const onScroll = () => {
+      if (ticking) return
+      ticking = true
+      requestAnimationFrame(check)
+    }
+    // scroll 不冒泡，必须在捕获阶段监听才能收到内部滚动容器的事件
+    window.addEventListener('scroll', onScroll, true)
+    window.addEventListener('resize', onScroll)
+    return () => {
+      window.removeEventListener('scroll', onScroll, true)
+      window.removeEventListener('resize', onScroll)
+    }
+  }, [active, mode])
 
   /* diff 全部处理完 → 落盘 */
   const allResolved =
-    ui.diff != null &&
-    ui.diff.decisions.every((d) => d !== undefined)
+    diff != null && diff.decisions.every((d) => d !== undefined)
   useEffect(() => {
-    if (!showDiff || !allResolved || !ui.diff) return
+    if (!showDiff || !allResolved || !diff) return
     const t = window.setTimeout(() => {
       useProjectStore
         .getState()
         .applySuggestionDecision(
-          ui.diff!.suggestionId,
-          ui.diff!.decisions.map((d) => d === true)
+          diff.suggestionId,
+          diff.decisions.map((d) => d === true)
         )
       useUIStore.getState().closeDiff()
       useUIStore
@@ -136,8 +196,6 @@ export function BlockCard({ block, prevBlock, active }: Props) {
     return () => window.clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allResolved, showDiff])
-
-  if (!data) return null
 
   const classes = [
     'block',
@@ -149,6 +207,8 @@ export function BlockCard({ block, prevBlock, active }: Props) {
     .filter(Boolean)
     .join(' ')
 
+  const ui = () => useUIStore.getState()
+
   const renderMode = (m: string, isGhost: boolean) => {
     switch (m) {
       case 'edit':
@@ -159,15 +219,15 @@ export function BlockCard({ block, prevBlock, active }: Props) {
               className="block-edit"
               value={editing?.draft ?? block.text}
               readOnly={isGhost}
-              onChange={(e) => ui.updateEditDraft(e.target.value)}
+              onChange={(e) => ui().updateEditDraft(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Escape') {
                   e.preventDefault()
-                  ui.cancelEdit()
+                  ui().cancelEdit()
                 }
                 if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
                   e.preventDefault()
-                  ui.confirmEdit()
+                  ui().confirmEdit()
                 }
               }}
             />
@@ -187,15 +247,15 @@ export function BlockCard({ block, prevBlock, active }: Props) {
                 placeholder="对这段有什么意见？例如：压到 50 字以内"
                 value={opinion?.draft ?? ''}
                 readOnly={isGhost}
-                onChange={(e) => ui.updateOpinionDraft(e.target.value)}
+                onChange={(e) => ui().updateOpinionDraft(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Escape') {
                     e.preventDefault()
-                    ui.cancelOpinion()
+                    ui().cancelOpinion()
                   }
                   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
                     e.preventDefault()
-                    void ui.startRevise(block.key)
+                    void ui().startRevise(block.key)
                   }
                 }}
               />
@@ -203,7 +263,7 @@ export function BlockCard({ block, prevBlock, active }: Props) {
                 <span>AI 将按意见产出 diff，逐处确认后生效</span>
                 <button
                   className="btn btn-primary"
-                  onClick={() => void ui.startRevise(block.key)}
+                  onClick={() => void ui().startRevise(block.key)}
                 >
                   提交
                   <span className="kbd" style={{ color: 'rgba(255,255,255,.75)' }}>
@@ -216,18 +276,18 @@ export function BlockCard({ block, prevBlock, active }: Props) {
         )
       case 'stream':
         return stream ? (
-          <StreamView tw={stream.tw} onAbort={() => ui.abortAI()} />
+          <StreamView tw={stream.tw} onAbort={() => ui().abortAI()} />
         ) : null
       case 'diff':
         return (
           <DiffView
             ops={diffSuggestion?.diff ?? []}
-            decisions={ui.diff?.decisions ?? []}
-            focused={ui.diff?.focused ?? 0}
-            onChangeFocus={(i) => ui.focusCluster(i)}
-            onDecide={(i, accepted) => ui.setDecision(i, accepted)}
-            onAcceptAll={() => ui.decideAll(true)}
-            onRejectAll={() => ui.decideAll(false)}
+            decisions={diff?.decisions ?? []}
+            focused={diff?.focused ?? 0}
+            onChangeFocus={(i) => ui().focusCluster(i)}
+            onDecide={(i, accepted) => ui().setDecision(i, accepted)}
+            onAcceptAll={() => ui().decideAll(true)}
+            onRejectAll={() => ui().decideAll(false)}
           />
         )
       default:
@@ -239,7 +299,7 @@ export function BlockCard({ block, prevBlock, active }: Props) {
                 <IconSparkles size={12} />
                 <button
                   style={{ color: 'var(--warning)', fontWeight: 600 }}
-                  onClick={() => ui.openDiff(pendingSuggestion.id)}
+                  onClick={() => ui().openDiff(pendingSuggestion.id)}
                 >
                   AI 已产出修改，点击查看 diff
                 </button>
@@ -252,26 +312,31 @@ export function BlockCard({ block, prevBlock, active }: Props) {
 
   return (
     <div
-      ref={ref}
+      ref={rootRef}
       className={classes}
       data-block-key={block.key}
-      onMouseDown={() => {
-        if (ui.activeKey !== block.key) ui.setActive(block.key)
+      style={enterDelay ? { animationDelay: `${enterDelay}ms` } : undefined}
+      onClick={() => {
+        // 用户正在拖选文本时不切换选中块，避免干扰复制
+        const sel = window.getSelection()
+        if (sel && !sel.isCollapsed && sel.toString().length > 0) return
+        if (mode !== 'read') return
+        if (ui().activeKey !== block.key) ui().setActive(block.key)
       }}
       onContextMenu={(e) => {
         e.preventDefault()
-        ui.setActive(block.key)
-        setMenu({ x: e.clientX, y: e.clientY })
+        ui().setActive(block.key)
+        ui().setContextMenu({ x: e.clientX, y: e.clientY, key: block.key })
       }}
     >
       <span className="block-anchor" />
       {block.status === 'dirty' && <span className="dirty-dot" title="未保存的修改" />}
 
       {active && mode === 'read' && (
-        <div className="floating-toolbar">
+        <div className={`floating-toolbar${toolbarBelow ? ' below' : ''}`}>
           <button
-            className="tool-btn"
-            onClick={() => ui.beginEdit(block.key, block.text)}
+            className={`tool-btn${keyEcho === 'e' ? ' pressed-echo' : ''}`}
+            onClick={() => ui().beginEdit(block.key, block.text)}
             title="编辑（E）"
           >
             <IconEdit />
@@ -279,8 +344,8 @@ export function BlockCard({ block, prevBlock, active }: Props) {
             <span className="kbd">E</span>
           </button>
           <button
-            className="tool-btn"
-            onClick={() => ui.beginOpinion(block.key)}
+            className={`tool-btn${keyEcho === 'r' ? ' pressed-echo' : ''}`}
+            onClick={() => ui().beginOpinion(block.key)}
             title="提意见（R）"
           >
             <IconComment />
@@ -288,8 +353,8 @@ export function BlockCard({ block, prevBlock, active }: Props) {
             <span className="kbd">R</span>
           </button>
           <button
-            className="tool-btn"
-            onClick={() => void ui.startRewrite(block.key)}
+            className={`tool-btn${keyEcho === 't' ? ' pressed-echo' : ''}`}
+            onClick={() => void ui().startRewrite(block.key)}
             title="重写（T）"
           >
             <IconSparkles />
@@ -305,7 +370,7 @@ export function BlockCard({ block, prevBlock, active }: Props) {
           style={{ position: 'absolute', top: -2, right: -8, zIndex: 10 }}
           title="版本历史"
           onClick={() =>
-            ui.setVersionPanelKey(versionPanelOpen ? null : block.key)
+            ui().setVersionPanelKey(versionPanelOpen ? null : block.key)
           }
         >
           <IconHistory size={12} />
@@ -324,12 +389,10 @@ export function BlockCard({ block, prevBlock, active }: Props) {
         </div>
       )}
 
-      <div className="morph">
-        {renderMode(mode, false)}
+      <div ref={morphRef} className={`morph${ghost ? ' morphing' : ''}`}>
+        <div className="morph-layer current">{renderMode(mode, false)}</div>
         {ghost && (
-          <div className="morph-layer leaving" style={{ opacity: 0 }}>
-            {renderMode(ghost.from, true)}
-          </div>
+          <div className="morph-layer leaving">{renderMode(ghost.from, true)}</div>
         )}
       </div>
 
@@ -343,8 +406,8 @@ export function BlockCard({ block, prevBlock, active }: Props) {
           <button
             className="context-menu-item"
             onClick={() => {
-              ui.beginEdit(block.key, block.text)
-              setMenu(null)
+              ui().beginEdit(block.key, block.text)
+              ui().setContextMenu(null)
             }}
           >
             编辑
@@ -353,8 +416,8 @@ export function BlockCard({ block, prevBlock, active }: Props) {
           <button
             className="context-menu-item"
             onClick={() => {
-              ui.beginOpinion(block.key)
-              setMenu(null)
+              ui().beginOpinion(block.key)
+              ui().setContextMenu(null)
             }}
           >
             提意见
@@ -363,8 +426,8 @@ export function BlockCard({ block, prevBlock, active }: Props) {
           <button
             className="context-menu-item"
             onClick={() => {
-              void ui.startRewrite(block.key)
-              setMenu(null)
+              void ui().startRewrite(block.key)
+              ui().setContextMenu(null)
             }}
           >
             重写
@@ -378,12 +441,10 @@ export function BlockCard({ block, prevBlock, active }: Props) {
                 const ids = useProjectStore
                   .getState()
                   .mergeWithPrevious(block.key, prevBlock.key)
-                setMenu(null)
+                ui().setContextMenu(null)
                 if (ids.length) {
-                  useUIStore.getState().setActive(`s:${ids[0]}`)
-                  useUIStore
-                    .getState()
-                    .pushToast({ kind: 'success', text: '已合并相邻块' })
+                  ui().setActive(`s:${ids[0]}`)
+                  ui().pushToast({ kind: 'success', text: '已合并相邻块' })
                 }
               }}
             >
@@ -394,12 +455,10 @@ export function BlockCard({ block, prevBlock, active }: Props) {
             className="context-menu-item"
             onClick={() => {
               const ids = useProjectStore.getState().splitAt(block.key, null)
-              setMenu(null)
+              ui().setContextMenu(null)
               if (ids.length) {
-                useUIStore.getState().setActive(`s:${ids[0]}`)
-                useUIStore
-                  .getState()
-                  .pushToast({ kind: 'success', text: '已按句子边界拆分' })
+                ui().setActive(`s:${ids[0]}`)
+                ui().pushToast({ kind: 'success', text: '已按句子边界拆分' })
               }
             }}
           >
@@ -409,7 +468,7 @@ export function BlockCard({ block, prevBlock, active }: Props) {
             className="context-menu-item"
             onClick={() => {
               setPickerOpen(true)
-              setMenu(null)
+              ui().setContextMenu(null)
             }}
           >
             挂靠到大纲节点…
@@ -418,8 +477,8 @@ export function BlockCard({ block, prevBlock, active }: Props) {
           <button
             className="context-menu-item"
             onClick={() => {
-              ui.setVersionPanelKey(versionPanelOpen ? null : block.key)
-              setMenu(null)
+              ui().setVersionPanelKey(versionPanelOpen ? null : block.key)
+              ui().setContextMenu(null)
             }}
           >
             版本历史
@@ -429,10 +488,8 @@ export function BlockCard({ block, prevBlock, active }: Props) {
             className="context-menu-item"
             onClick={() => {
               void navigator.clipboard.writeText(block.text)
-              setMenu(null)
-              useUIStore
-                .getState()
-                .pushToast({ kind: 'info', text: '已复制块文本' })
+              ui().setContextMenu(null)
+              ui().pushToast({ kind: 'info', text: '已复制块文本' })
             }}
           >
             复制文本
@@ -446,7 +503,7 @@ export function BlockCard({ block, prevBlock, active }: Props) {
           onPick={(nodeId) => {
             useProjectStore.getState().attachToNode(block.key, nodeId)
             setPickerOpen(false)
-            useUIStore.getState().pushToast({
+            ui().pushToast({
               kind: 'success',
               text: nodeId ? '已挂靠到节点' : '已取消挂靠',
             })
@@ -458,6 +515,7 @@ export function BlockCard({ block, prevBlock, active }: Props) {
       {/* 版本历史 */}
       {versionPanelOpen && (
         <div
+          ref={versionRef}
           className="popover"
           style={{ position: 'absolute', top: 8, right: 0, zIndex: 60 }}
         >
@@ -468,10 +526,10 @@ export function BlockCard({ block, prevBlock, active }: Props) {
               className={`version-item${i === block.versions.length - 1 ? ' current' : ''}`}
               onClick={() => {
                 const ids = useProjectStore.getState().rollback(block.key, i)
-                useUIStore.getState().setVersionPanelKey(null)
+                ui().setVersionPanelKey(null)
                 if (ids.length) {
-                  useUIStore.getState().setActive(`s:${ids[0]}`)
-                  useUIStore.getState().pushToast({
+                  ui().setActive(`s:${ids[0]}`)
+                  ui().pushToast({
                     kind: 'success',
                     text: `已回退到版本 v${v.v}`,
                   })
@@ -499,7 +557,10 @@ function NodePicker({
 }) {
   const data = useProjectStore((s) => s.data)
   useEffect(() => {
-    const close = () => onClose()
+    const close = (e: MouseEvent) => {
+      if ((e.target as HTMLElement | null)?.closest('.popover')) return
+      onClose()
+    }
     window.addEventListener('mousedown', close)
     return () => window.removeEventListener('mousedown', close)
   }, [onClose])

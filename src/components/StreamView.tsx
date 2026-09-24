@@ -1,5 +1,10 @@
-/** 流式生成态：打字机缓冲渲染（design §3.3） */
-import { useEffect, useState } from 'react'
+/**
+ * 流式生成态：打字机缓冲渲染（design §3.3）。
+ *
+ * 性能纪律：rAF 每帧吐字时直接写 DOM textContent，不触发 React
+ * 重渲染——5 万字文档的块流里，这是打字机不掉帧的关键。
+ */
+import { useEffect, useRef } from 'react'
 import type { Typewriter } from '../lib/typewriter'
 import { IconX } from './icons'
 
@@ -9,15 +14,22 @@ interface Props {
 }
 
 export function StreamView({ tw, onAbort }: Props) {
-  const [shown, setShown] = useState('')
+  const textRef = useRef<HTMLSpanElement>(null)
+  const caretRef = useRef<HTMLSpanElement>(null)
 
-  useEffect(() => tw.subscribe((s) => setShown(s.shown)), [tw])
+  useEffect(() => {
+    return tw.subscribe((s) => {
+      if (textRef.current) textRef.current.textContent = s.shown
+      // 生成完成瞬间：光标圆点缩小消失（150ms）
+      caretRef.current?.classList.toggle('done', s.done)
+    })
+  }, [tw])
 
   return (
     <div style={{ position: 'relative' }}>
       <p className="prose block-text">
-        {shown}
-        <span className="typewriter-caret" />
+        <span ref={textRef} />
+        <span ref={caretRef} className="typewriter-caret" />
       </p>
       <div
         className="stream-meta"

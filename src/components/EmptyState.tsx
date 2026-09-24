@@ -19,6 +19,14 @@ interface Props {
 export function EmptyState({ onImportText, onImportJson }: Props) {
   const [dropping, setDropping] = useState(false)
   const [recoveryAt, setRecoveryAt] = useState<string | null>(null)
+  /* 稿纸入场动画只在会话首次载入播放，之后回到空状态不再重复 */
+  const [firstShow] = useState(
+    () => !sessionStorage.getItem('ai-writer:paper-shown')
+  )
+
+  useEffect(() => {
+    sessionStorage.setItem('ai-writer:paper-shown', '1')
+  }, [])
 
   useEffect(() => {
     void loadRecovery().then((r) => {
@@ -52,7 +60,7 @@ export function EmptyState({ onImportText, onImportJson }: Props) {
   return (
     <div className="empty-holder">
       <div
-        className={`paper${dropping ? ' dropping' : ''}`}
+        className={`paper${dropping ? ' dropping' : ''}${firstShow ? '' : ' no-anim'}`}
         onDragOver={(e) => {
           e.preventDefault()
           setDropping(true)
