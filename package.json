@@ -1,6 +1,7 @@
 {
   "name": "suixin-writing",
   "private": true,
+  "license": "MIT",
   "version": "0.1.0",
   "description": "块级 AI 协作写作桌面应用（Tauri + React + TypeScript）",
   "type": "module",

@@ -70,3 +70,7 @@ scripts/     一次性工具脚本
 1. 读 `blocks[status=pending]` 与 `suggestions[state=pending]` 获得待办；
 2. 外部处理后，将 `suggestions[].state` 置为 `accepted/rejected`，并按结果更新 `blocks[].text`、追加 `versions`；
 3. 不认识的字段必须原样保留（forward-compatible）。
+
+## 许可证
+
+[MIT](LICENSE)
