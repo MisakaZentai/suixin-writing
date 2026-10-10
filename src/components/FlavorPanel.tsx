@@ -1,5 +1,5 @@
 /**
- * AI 味面板：整篇的指数、选中段落的命中与改法、按规则汇总、最该先改的段落。
+ * AI 味面板：整篇的指数、选中段落的命中与改法、按规则汇总、最该先改的段落、作者标的"读着像 AI"。
  * 打开时正文里标出命中。数字只用来找嫌疑，由作者定案（见 docs/AI味方案.md）。
  */
 import { useEffect, useState } from 'react'
@@ -7,6 +7,7 @@ import { useProjectStore } from '../store/projectStore'
 import { useUIStore } from '../store/uiStore'
 import { BUILTIN, clearFlavorIgnores, flavorReport, ignoreFlavorHit, setFlavorBaseline, setFlavorGenre } from '../store/flavorActions'
 import { useBaselineStore } from '../store/baselineStore'
+import { useDocLabels, useLabelStore } from '../store/labelStore'
 import { BaselineModal } from './BaselineModal'
 import { deflavorBlock } from '../store/aiActions'
 import { RULES, SEVERITY_LABEL, type FlavorHit, type Genre } from '../lib/flavor'
@@ -27,6 +28,8 @@ export function FlavorPanel() {
   useBaselineStore((s) => s.revision)
   // 命令行可能新建了基线：打开面板时重读一遍
   useEffect(() => void useBaselineStore.getState().load(), [])
+  const labels = useDocLabels()
+  const totalLabels = useLabelStore((s) => s.store.labels.length)
   if (!data) return null
   const ui = () => useUIStore.getState()
   const report = flavorReport(data)
@@ -130,7 +133,10 @@ export function FlavorPanel() {
                         <span className={`flavor-dot sev-${r.severity}`} aria-hidden />
                         <span className="flavor-rule-name">{r.name}</span>
                         <span className="flavor-rule-count">{r.count} 处</span>
-                        <span className="flavor-rule-density" title="每万字出现次数 / 允许的次数">
+                        <span
+                          className="flavor-rule-density"
+                          title="每万字出现次数 / 基线允许的次数。字数少时碰巧超过不算，次数明显多于预期才算超标（标成醒目色）"
+                        >
                           {r.density} / {r.allowance}
                         </span>
                       </button>
@@ -142,6 +148,9 @@ export function FlavorPanel() {
                             {rule.advice}
                           </p>
                           <p className="flavor-source">依据：{rule.source}</p>
+                          {rule.holdout && (
+                            <p className="flavor-source">这条只给你看：不会出现在 agent 拿到的检查结果里，免得被它改个说法躲开。</p>
+                          )}
                           {target && (
                             <button className="link-btn" onClick={() => locate(target)}>
                               看第一处
@@ -187,6 +196,32 @@ export function FlavorPanel() {
             )}
           </>
         )}
+
+        <section aria-label="你标的读着像 AI">
+          <div className="flavor-section-title">你标的「读着像 AI」</div>
+          {labels.length === 0 ? (
+            <p className="flavor-note">
+              读到像 AI 写的段落，右键「读着像 AI」标一下；划选了一句就只标那一句。引擎没抓到的地方最有用。
+            </p>
+          ) : (
+            labels.map((l) => (
+              <div key={l.id} className="flavor-block">
+                <button className="flavor-block-text" onClick={() => locate(l.blockId)} title={l.quote ?? l.text}>
+                  <span className={`flavor-badge ${l.hits.length ? 'level-轻微' : 'level-明显'}`}>{l.hits.length ? '抓到' : '漏网'}</span>
+                  {(l.quote ?? l.text).slice(0, 40)}
+                </button>
+                <button className="btn btn-plain" onClick={() => void useLabelStore.getState().remove(l.id)}>
+                  取消
+                </button>
+              </div>
+            ))
+          )}
+          {totalLabels > 0 && (
+            <p className="flavor-note">
+              所有文稿一共标了 {totalLabels} 处。攒到二三十处，就能拿来和你自己的文字对比，挖新规则的候选。
+            </p>
+          )}
+        </section>
 
         {ignored > 0 && (
           <div className="flavor-ignored">

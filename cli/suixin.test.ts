@@ -90,7 +90,7 @@ describe('suixin 命令行', () => {
     // 第一份基线自动成为默认
     const listed = await cli(['baseline', 'list'], '', env)
     expect(listed.json.default).toBe('我')
-    const text = ['flavor', '稿.suixin.json', '--text', '这里的冬天不是冷，而是湿。墙角长出一层白霜，被子怎么晒都是潮的。']
+    const text = ['flavor', '稿.suixin.json', '--text', '这里的冬天不是冷，而是湿。风不是吹，而是推。雨不是下，而是砸。墙角长出一层白霜，被子怎么晒都是潮的。']
     const mine = (await cli(text, '', env)).json.results[0]
     const builtin = (await cli([...text, '--baseline', '内置'], '', env)).json.results[0]
     expect(mine.index).toBeLessThan(builtin.index)

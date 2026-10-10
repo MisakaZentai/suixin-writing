@@ -1,4 +1,4 @@
-/** 顶栏：品牌（返回文稿列表）· 标题 · 保存状态 · 文件菜单 · 待办 · 帮助 · 设置 */
+/** 顶栏：品牌（返回文稿列表）· 标题 · 保存状态 · 字数 · 文件菜单 · 待办 · 帮助 · 设置 */
 import { useEffect, useRef, useState } from 'react'
 import { IconHelp, IconList, IconSettings, IconSidebar, IconSparkles } from './icons'
 import { useProjectStore } from '../store/projectStore'
@@ -10,6 +10,9 @@ import { useBridgeStore } from '../store/bridgeStore'
 import { exportHtml } from '../store/exportActions'
 import { MenuItem } from './BlockCard'
 import { inferSections, reviewWholeDocument } from '../store/aiActions'
+import { countChars } from '../lib/flavor'
+import { isImageText } from '../lib/images'
+import type { DocBlock } from '../types'
 
 interface Props {
   scrolled: boolean
@@ -67,6 +70,7 @@ export function Toolbar({ scrolled }: Props) {
             spellCheck={false}
           />
           <SaveStatus />
+          <WordCount />
           <div className="toolbar-spacer" data-tauri-drag-region />
           <AgentPresence />
           <AIMenu canInfer={canInfer} />
@@ -140,6 +144,33 @@ function SaveStatus() {
       title={path ? `已同步到 ${path}` : '自动保存在本机文稿库；Ctrl+Shift+S 可另存为文件'}
     >
       {busy ? '保存中…' : '已保存'}
+    </span>
+  )
+}
+
+const totals = new WeakMap<DocBlock[], number>()
+function totalChars(blocks: DocBlock[]): number {
+  let n = totals.get(blocks)
+  if (n === undefined) {
+    n = blocks.reduce((sum, b) => (b.type === 'paragraph' && isImageText(b.text) ? sum : sum + countChars(b.text)), 0)
+    totals.set(blocks, n)
+  }
+  return n
+}
+
+/** 全文字数；段内划选了文字时显示选中多少字 */
+function WordCount() {
+  const total = useProjectStore((s) => (s.data ? totalChars(s.data.blocks) : 0))
+  const picked = useUIStore((s) => {
+    const r = s.textRange
+    if (!r || r.end <= r.start) return 0
+    const b = useProjectStore.getState().data?.blocks.find((x) => x.id === r.blockId)
+    return b ? countChars(b.text.slice(r.start, r.end)) : 0
+  })
+  return (
+    <span className="save-status word-count" data-tauri-drag-region title="不计标点与空白，图片不算">
+      {picked ? `选中 ${picked} 字 · ` : ''}
+      {total.toLocaleString('zh-CN')} 字
     </span>
   )
 }

@@ -13,6 +13,14 @@ export interface ProviderPreset {
   model: string
   /** 模型名候选（仅作输入提示，可自由填写） */
   models: string[]
+  /** 同一服务的几个地域端点（第一个与 baseURL 相同） */
+  regions?: { label: string; baseURL: string }[]
+  /** Key 的固定前缀：粘贴的 Key 对不上时提醒（套餐 Key 与按量 Key 不能混用） */
+  keyPrefixes?: string[]
+  /** 选中时显示的一句说明 */
+  note?: string
+  /** 订阅套餐（Token Plan / 会员额度）：设置里与按量付费分开列 */
+  plan?: boolean
 }
 
 export const PROVIDERS: ProviderPreset[] = [
@@ -34,8 +42,9 @@ export const PROVIDERS: ProviderPreset[] = [
     id: 'kimi',
     name: 'Kimi',
     baseURL: 'https://api.moonshot.cn/v1',
-    model: 'moonshot-v1-8k',
-    models: ['moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k'],
+    model: 'kimi-k3',
+    models: ['kimi-k3', 'kimi-k2.6', 'kimi-k2.7-code', 'moonshot-v1-32k'],
+    note: 'Kimi 开放平台，按量计费。用的是 Kimi 会员额度请选「Kimi Code 会员」。',
   },
   {
     id: 'zhipu',
@@ -50,6 +59,43 @@ export const PROVIDERS: ProviderPreset[] = [
     baseURL: 'https://api.openai.com/v1',
     model: 'gpt-4o-mini',
     models: ['gpt-4o-mini', 'gpt-4o'],
+  },
+  {
+    id: 'mimo',
+    name: '小米 MiMo',
+    baseURL: 'https://api.xiaomimimo.com/v1',
+    model: 'mimo-v2.6-pro',
+    models: ['mimo-v2.6-pro', 'mimo-v2.6-flash'],
+    keyPrefixes: ['sk-'],
+    note: '按量计费。买的是 Token Plan 套餐请选「MiMo Token Plan」，两种 Key 不能混用。',
+  },
+  {
+    id: 'mimo-token-plan',
+    name: 'MiMo Token Plan',
+    baseURL: 'https://token-plan-cn.xiaomimimo.com/v1',
+    model: 'mimo-v2.6-pro',
+    models: ['mimo-v2.6-pro', 'mimo-v2.6-flash'],
+    regions: [
+      { label: '中国', baseURL: 'https://token-plan-cn.xiaomimimo.com/v1' },
+      { label: '新加坡', baseURL: 'https://token-plan-sgp.xiaomimimo.com/v1' },
+      { label: '欧洲', baseURL: 'https://token-plan-ams.xiaomimimo.com/v1' },
+    ],
+    keyPrefixes: ['tp-', 'ttp-'],
+    note: '套餐 Key 在 Token Plan 页面获取（tp- 开头），订阅到期后需续订。',
+    plan: true,
+  },
+  {
+    id: 'kimi-code',
+    name: 'Kimi Code 会员',
+    baseURL: 'https://api.kimi.com/coding/v1',
+    model: 'kimi-for-coding',
+    models: ['kimi-for-coding', 'kimi-for-coding-highspeed'],
+    regions: [
+      { label: '中国', baseURL: 'https://api.kimi.com/coding/v1' },
+      { label: '海外', baseURL: 'https://api.kimi.ai/coding/v1' },
+    ],
+    note: '用 Kimi 会员额度，Key 在 Kimi Code 控制台创建。Kimi 只对编程工具开放这组接口，可能拒绝本应用；被拒时可用「交给 Agent」，让 Kimi Code 连上随心写作来改。',
+    plan: true,
   },
   {
     id: 'custom',
@@ -89,6 +135,14 @@ export function providerById(id: string): ProviderPreset {
 
 export function temperatureOf(style: AIStyle): number {
   return STYLE_OPTIONS.find((s) => s.value === style)?.temperature ?? 0.7
+}
+
+/** 粘贴的 Key 与服务商要求的前缀对不上时，返回提醒文字 */
+export function keyMismatch(preset: ProviderPreset, key: string): string | null {
+  const k = key.trim()
+  if (!k || !preset.keyPrefixes?.length) return null
+  if (preset.keyPrefixes.some((p) => k.startsWith(p))) return null
+  return `${preset.name} 的 Key 应以 ${preset.keyPrefixes.join(' 或 ')} 开头，这把可能是别的计费方式的 Key`
 }
 
 /** 每个服务商一把 Key，切换服务商不会互相覆盖 */

@@ -17,7 +17,7 @@ export function currentAssetCtx(): AssetCtx | null {
 }
 
 /** 插在哪里：正在编辑 / 选中的块之后；都没有就放文末 */
-function anchor(data: ProjectData): string | null {
+export function insertionAnchor(data: ProjectData): string | null {
   const ui = useUIStore.getState()
   const id = ui.editing?.id ?? ui.selection?.ids.at(-1) ?? ui.activeId
   if (id && data.blocks.some((b) => b.id === id)) return id
@@ -31,7 +31,7 @@ export async function insertImages(images: PickedImage[], afterId?: string | nul
   const usable = images.filter((i) => i.bytes.length && (isImageName(i.name) || !extOf(i.name)))
   if (!ctx || !data || !usable.length) return 0
   ui.confirmEdit()
-  let after = afterId === undefined ? anchor(data) : afterId
+  let after = afterId === undefined ? insertionAnchor(data) : afterId
   const srcs: string[] = []
   try {
     for (const img of usable) {

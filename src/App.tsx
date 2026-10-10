@@ -22,7 +22,8 @@ import { useAIConfigStore } from './store/aiConfigStore'
 import { useDocsStore } from './store/docsStore'
 import { customTitlebar, filesToImages, isTauri, readBinaryAt, readFileAt } from './lib/platform'
 import { isImageName } from './lib/images'
-import { insertImages } from './store/imageActions'
+import { insertImages, insertionAnchor } from './store/imageActions'
+import { tsvToTable } from './lib/md'
 import { revealBlock } from './lib/scroll'
 import { abortAI, regenerate } from './store/aiActions'
 import { startBridge } from './bridge/connect'
@@ -31,6 +32,7 @@ import { PublishModal } from './components/PublishModal'
 import { WindowControls } from './components/WindowControls'
 import { FlavorPanel } from './components/FlavorPanel'
 import { useBaselineStore } from './store/baselineStore'
+import { useLabelStore } from './store/labelStore'
 
 export function App() {
   const data = useProjectStore((s) => s.data)
@@ -64,6 +66,7 @@ export function App() {
     void useAIConfigStore.getState().refreshKeyPresence()
     void useDocsStore.getState().init()
     void useBaselineStore.getState().load()
+    void useLabelStore.getState().load()
     void startBridge()
   }, [])
 
@@ -343,12 +346,24 @@ export function App() {
     [data]
   )
 
-  /* 粘贴图片：插在当前段落后面；没打开文稿时 Ctrl+V 直接导入为新文稿 */
+  /* 粘贴图片 / 表格：插在当前段落后面；没打开文稿时 Ctrl+V 直接导入为新文稿 */
   const onPaste = useCallback((e: ClipboardEvent) => {
+    // 编辑框自己处理过了（比如把表格格子转成了 Markdown 表格）
+    if (e.defaultPrevented) return
     const target = e.target as HTMLElement | null
     const images = Array.from(e.clipboardData?.files ?? []).filter((f) => f.type.startsWith('image/'))
     const inOtherField =
       target && (target.tagName === 'INPUT' || (target.tagName === 'TEXTAREA' && !target.classList.contains('block-edit')))
+    const inField = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+    // 从 Excel / WPS 复制的格子：剪贴板里同时有文字和一张截图，要的是表格
+    const data = useProjectStore.getState().data
+    const table = data && !inField ? tsvToTable(e.clipboardData?.getData('text/plain') ?? '') : null
+    if (table && data) {
+      e.preventDefault()
+      const fresh = useProjectStore.getState().insertParagraphAfter(insertionAnchor(data), table)
+      if (fresh) useUIStore.getState().setActive(fresh)
+      return
+    }
     if (images.length && useProjectStore.getState().data && !inOtherField) {
       e.preventDefault()
       void filesToImages(images).then((imgs) => insertImages(imgs))

@@ -1,4 +1,6 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// 调试版也按窗口程序链接：双击启动时不弹控制台黑框；
+// 从终端 `tauri dev` 启动时标准输出由父进程传入，日志照样打在终端里。
+#![windows_subsystem = "windows"]
 
 mod bridge;
 

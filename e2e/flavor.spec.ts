@@ -100,7 +100,7 @@ test('指令框里的「去 AI 味」：没有命中时就地告知，不发请�
   expect(seen).toHaveLength(0)
 })
 
-test('建立我的基线：来源本身 AI 味重时先提醒；建好后按它计算', async ({ page }) => {
+test('建立我的基线：建好后按它计算，刷新后仍在', async ({ page }) => {
   await openSample(page)
   await openFlavor(page)
   const panel = page.getByRole('complementary', { name: 'AI 味' })
@@ -108,10 +108,8 @@ test('建立我的基线：来源本身 AI 味重时先提醒；建好后按它�
   await panel.getByRole('button', { name: '建立我的基线…' }).click()
   const dialog = page.getByRole('dialog', { name: '建立我的基线' })
   await dialog.getByRole('checkbox').first().check() // 文稿库里的示例文稿
+  // 示例文稿只有一处"不是…而是…"，不显著：不提醒，直接建立（来源套路很重时的提醒由命令行的单元测试覆盖）
   await dialog.getByRole('button', { name: '建立', exact: true }).click()
-  // 示例文稿本身就有"不是…而是…"：提醒会把套路当成习惯，要再确认一次
-  await expect(dialog.locator('.baseline-warning')).toContainText('AI 味指数')
-  await dialog.getByRole('button', { name: '仍然建立' }).click()
   await expect(dialog).toHaveCount(0)
   await expect(panel).toContainText('相对「我的文风」的基线')
   await expect(panel.getByRole('combobox', { name: '基线' })).toContainText('我的文风（')
@@ -120,4 +118,43 @@ test('建立我的基线：来源本身 AI 味重时先提醒；建好后按它�
   await page.locator('.block-flow .block').first().waitFor()
   await openFlavor(page)
   await expect(page.getByRole('complementary', { name: 'AI 味' })).toContainText('相对「我的文风」的基线')
+})
+
+test('作者标注：右键「读着像 AI」，面板里列出（引擎漏网的也标明），再点一次取消；划选一句只标那一句', async ({ page }) => {
+  await openSample(page)
+  const blocks = page.locator('.block-flow .block')
+  const second = blocks.nth(1) // 「水的经济学」下的一段：引擎没有命中
+  await second.click({ button: 'right' })
+  await page.getByRole('button', { name: '读着像 AI', exact: true }).click()
+  await expect(page.locator('.toast')).toContainText('引擎没抓到这里')
+
+  await openFlavor(page)
+  const panel = page.getByRole('complementary', { name: 'AI 味' })
+  const section = panel.getByRole('region', { name: '你标的读着像 AI' })
+  await expect(section).toContainText('漏网')
+  await expect(section).toContainText('城里流通两种货币')
+  await expect(section).toContainText('所有文稿一共标了 1 处')
+  await expect(second).toHaveClass(/labeled-ai/)
+
+  await second.click({ button: 'right' })
+  await page.getByRole('button', { name: '取消「读着像 AI」' }).click()
+  await expect(section).toContainText('右键「读着像 AI」标一下')
+  await expect(second).not.toHaveClass(/labeled-ai/)
+
+  // 划选一句：菜单变成「这句读着像 AI」
+  const text = second.locator('.block-text')
+  await text.evaluate((el) => {
+    const node = el.firstChild as Text
+    const range = document.createRange()
+    range.setStart(node, 0)
+    range.setEnd(node, 7)
+    const sel = window.getSelection()!
+    sel.removeAllRanges()
+    sel.addRange(range)
+    el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }))
+  })
+  await text.click({ button: 'right', position: { x: 20, y: 10 } })
+  await page.getByRole('button', { name: '这句读着像 AI' }).click()
+  await expect(section).toContainText('城里流通两种货')
+  await expect(section).not.toContainText('另一种是水票')
 })

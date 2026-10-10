@@ -10,6 +10,10 @@ describe('AI 味规则', () => {
     expect(rules('这不是工具，而是一种思维方式。', 'essay')).toContain('neg_correction')
     expect(rules('他停下来。不是累了。是不想再走。')).toContain('neg_correction')
     expect(rules('那不是风——是有人在敲窗。')).toContain('neg_correction')
+    // 表格不是行文：格子里的字不查，表格外的照查
+    const table = '| 结论 | 说明 |\n| --- | --- |\n| 这不是工具，而是一种思维方式 | —— |'
+    expect(rules(table, 'essay')).toEqual([])
+    expect(rules(`${table}\n这不是工具，而是一种思维方式。`, 'essay')).toContain('neg_correction')
     expect(rules('这并非偶然，而是必然。', 'essay')).toContain('neg_correction')
   })
 
@@ -39,9 +43,12 @@ describe('AI 味规则', () => {
     expect(r.level).toBe('清爽')
   })
 
-  it('一段里的一个"不是…而是"就很显眼；整篇里偶尔一次不扣分', () => {
+  it('计分看次数是否显著：一次"不是…而是"只标位置不扣分，短短一段里用三次才算超标', () => {
     const one = analyzeText('市民们习惯了仰着头走路，不是为了看天，而是为了确认今天有没有谁偷偷下了雨。', { genre: 'fiction' })
-    expect(one.index).toBeGreaterThanOrEqual(35)
+    expect(one.hits.map((h) => h.rule)).toEqual(['neg_correction'])
+    expect(one.index).toBe(0)
+    const three = analyzeText('这里的冬天不是冷，而是湿。风不是吹，而是推。雨不是下，而是砸。', { genre: 'fiction' })
+    expect(three.index).toBeGreaterThanOrEqual(35)
     const filler = '街上的人照常上班，报亭照常开门，卖早点的摊子冒着白气，公交车一辆接一辆地进站。'.repeat(80) // 约三千字
     const doc = analyzeDocument([
       { id: 'a', type: 'paragraph', text: filler },
@@ -67,17 +74,23 @@ describe('AI 味规则', () => {
     expect(guessGenre('写作工具的核心问题是信任：作者需要知道每一处改动来自哪里。')).toBe('essay')
   })
 
-  it('个人基线：作者自己常用的句式有豁免额度', () => {
-    const para = '这里的冬天不是冷，而是湿。墙角长出一层白霜，被子怎么晒都是潮的。'
+  it('个人基线：作者自己常用的句式有豁免额度；只放宽、不收紧', () => {
+    const para = '这里的冬天不是冷，而是湿。风不是吹，而是推。雨不是下，而是砸。墙角长出一层白霜，被子怎么晒都是潮的。'
     const builtin = analyzeText(para, { genre: 'fiction' })
     const mine = buildBaseline('我', ['风不是吹，而是推。雨不是下，而是砸。'.repeat(10)])
     expect(mine.counts.neg_correction).toBe(20)
     const withBase = analyzeText(para, { genre: 'fiction', baseline: mine })
     expect(withBase.index!).toBeLessThan(builtin.index!)
     expect(withBase.baseline).toBe('我')
-    // 作者从来不用的句式，一出现就重罚
+    // 作者从来不用的句式：语料少时个人基线不比内置的更严（统计不稳）；两万字以上才收紧
     const never = buildBaseline('从不', ['雨停了，我去烧水。'.repeat(50)])
-    expect(analyzeText(para, { genre: 'fiction', baseline: never }).index!).toBeGreaterThanOrEqual(builtin.index!)
+    expect(analyzeText(para, { genre: 'fiction', baseline: never }).index).toBe(builtin.index)
+    const neverBig = buildBaseline('从不·多', ['雨停了，我去烧水。'.repeat(3000)])
+    expect(neverBig.chars).toBeGreaterThanOrEqual(20000)
+    const lone = '这里的冬天不是冷，而是湿。风是推着走的。墙角长出一层白霜，被子怎么晒都是潮的，屋里比屋外还冷。'.repeat(2)
+    expect(analyzeText(lone, { genre: 'fiction', baseline: neverBig }).index!).toBeGreaterThan(
+      analyzeText(lone, { genre: 'fiction' }).index!
+    )
   })
 
   it('句模复用：同一骨架在全文反复出现', () => {
@@ -117,16 +130,49 @@ describe('AI 味规则', () => {
     const d2 = flavorDelta(before, better, { genre: 'fiction' })
     expect(d2.added).toEqual([])
     expect(d2.removed.map((h) => h.rule)).toContain('neg_correction')
-    expect(d2.after!).toBeLessThan(d2.before!)
+    expect(d2.after!).toBeLessThanOrEqual(d2.before!)
+  })
+
+  it('泊松计分：次数不超过期望就不算显著；超得越多越显著', async () => {
+    const { poissonSurprise } = await import('./analyze')
+    expect(poissonSurprise(0, 0.5)).toBe(0)
+    expect(poissonSurprise(1, 2)).toBe(0)
+    // P(X ≥ 1 | λ = 0.01) ≈ 0.00995 → −log₁₀ ≈ 2.0
+    expect(poissonSurprise(1, 0.01)).toBeCloseTo(2.0, 1)
+    expect(poissonSurprise(3, 0.1)).toBeGreaterThan(poissonSurprise(2, 0.1))
+    expect(poissonSurprise(40, 1)).toBeGreaterThan(40)
   })
 })
 
 describe('AI 味规则：校准', () => {
-  it('顿号列举：专名列表不算；轻级规则单独最多到"轻微"', () => {
+  it('顿号列举：专名列表不算；小说里是轻级（单独最多到"轻微"），文章里升为中级', () => {
     expect(rules('导出 HTML、Markdown、PDF，内置 DeepSeek、Kimi、OpenAI。', 'essay')).not.toContain('dense_enum')
     const listy = '他买了苹果、香蕉、橘子，又挑了毛巾、牙刷、拖鞋，还看了锅碗、瓢盆、筷子。'.repeat(3)
-    const r = analyzeText(listy, { genre: 'essay' })
-    expect(r.rules.find((x) => x.rule === 'dense_enum')?.penalty).toBeGreaterThan(0)
-    expect(r.level === '清爽' || r.level === '轻微').toBe(true)
+    const fiction = analyzeText(listy, { genre: 'fiction' })
+    expect(fiction.rules.find((x) => x.rule === 'dense_enum')?.penalty).toBeGreaterThan(0)
+    expect(fiction.level === '清爽' || fiction.level === '轻微').toBe(true)
+    const essay = analyzeText(listy, { genre: 'essay' })
+    expect(essay.rules.find((x) => x.rule === 'dense_enum')?.severity).toBe('medium')
+    expect(essay.index!).toBeGreaterThan(fiction.index!)
+  })
+
+  it('二期叙事手法与"不是…而是"的变体', () => {
+    expect(rules('活倒是干得没毛病，就是慢。', 'essay')).toContain('concession_balance')
+    expect(rules('这个理论倒是比上一个高等一点，但是似乎还是有些问题。', 'essay')).not.toContain('concession_balance')
+    expect(rules('当时我没当回事，后来才发现这两个问题都有下文。', 'essay')).toContain('foreshadow_hook')
+    expect(rules('所以回到问题，结论是两个都能用。', 'essay')).toContain('signpost')
+    expect(rules('写到这里，大概就是这样吧。', 'essay')).toContain('essay_wrapup')
+    expect(rules('我愣了一下，过了一会儿才回过神。', 'essay')).toContain('reaction_beat')
+    expect(rules('她是那种很安静的人。听起来有点怪。', 'essay')).toContain('that_kind')
+    expect(rules('mimo 说补写不算。ds 就反问她那七分钟在想什么。mimo 说没写时间。', 'essay')).toContain('reported_pingpong')
+    // 不是转述："来说""可以说"
+    expect(rules('对于我来说，这很重要。可以说，我早就想好了。他说的没错。', 'essay')).not.toContain('reported_pingpong')
+    // 「不是…而是」的变体：倒装、不是不、省掉"是"
+    expect(rules('这应该是习惯，不是碰巧。', 'essay')).toContain('neg_correction')
+    expect(rules('mimo 不是不优秀，是那种半夜能想明白大问题的类型。', 'essay')).toContain('neg_correction')
+    expect(rules('那一下不冷，是"咦"的一下。', 'essay')).toContain('neg_correction')
+    // 跨句号仍排除"不是不"：正常的解释
+    expect(rules('我不是不想去。是你自己说的不用来。', 'essay')).not.toContain('neg_correction')
+    expect(rules('我不去，是因为下雨。', 'essay')).not.toContain('neg_correction')
   })
 })

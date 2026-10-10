@@ -29,8 +29,10 @@ import { PendingInsertLink } from './PendingInsertLink'
 import type { FlavorHit, Severity } from '../lib/flavor'
 import { adviceOf } from '../lib/flavor/project'
 import { useBlockFlavorHits } from '../store/flavorActions'
+import { useLabelStore } from '../store/labelStore'
 import { MdText, type Highlight } from './MdText'
-import { MdBackdrop, FormatBar, formatShortcut } from './MdEditing'
+import { MdBackdrop, FormatBar, applyTextEdit, formatShortcut } from './MdEditing'
+import { TABLE_TEMPLATE, tableEnter, tableLineRanges, tsvToTable } from '../lib/md'
 
 interface Props {
   block: ParagraphBlock
@@ -84,6 +86,11 @@ export const BlockCard = memo(function BlockCard({
     pendingDiffId ? s.data?.suggestions.find((x) => x.id === pendingDiffId)?.author?.name ?? null : null
   )
   const flavorHits = useBlockFlavorHits(id)
+  // 段内划选了文字时由选区浮条接管，块的浮动工具条让开（两处都有"AI"会重复，还会叠在一起）
+  const textPicked = useUIStore((s) => s.textRange?.blockId === id && s.textRange.end > s.textRange.start)
+  // 作者标过"读着像 AI"（块 id 全局唯一，不用再比对文稿）
+  const labeled = useLabelStore((s) => s.store.labels.some((l) => l.blockId === id))
+  const flavorOpen = useUIStore((s) => s.flavorOpen)
   const noteCount = useProjectStore((s) =>
     s.data ? pendingIndex(s.data.suggestions).notesByAnchor.get(id) ?? 0 : 0
   )
@@ -165,6 +172,7 @@ export const BlockCard = memo(function BlockCard({
     pendingDiffId ? 'pending' : '',
     inSelection ? 'in-selection' : '',
     mode !== 'read' ? 'busy' : '',
+    labeled && flavorOpen ? 'labeled-ai' : '',
   ]
     .filter(Boolean)
     .join(' ')
@@ -216,6 +224,18 @@ export const BlockCard = memo(function BlockCard({
                 if (ui().editing?.id === id) ui().confirmEdit()
               }}
               onKeyDown={(e) => handleEditorKey(e, id)}
+              onPaste={(e) => {
+                // 从 Excel / WPS / 网页表格复制来的格子：转成 Markdown 表格
+                const table = tsvToTable(e.clipboardData.getData('text/plain'))
+                if (!table || isGhost) return
+                e.preventDefault()
+                const el = e.currentTarget
+                const s = el.selectionStart
+                const before = s > 0 && el.value[s - 1] !== '\n' ? '\n' : ''
+                const after = el.selectionEnd < el.value.length && el.value[el.selectionEnd] !== '\n' ? '\n' : ''
+                const insert = before + table + after
+                applyTextEdit(el, { from: s, to: el.selectionEnd, insert, selStart: s + insert.length, selEnd: s + insert.length })
+              }}
             />
             {!isGhost && <FormatBar textareaRef={textareaRef} backdropRef={backdropRef} />}
           </div>
@@ -303,7 +323,7 @@ export const BlockCard = memo(function BlockCard({
     >
       <span className="block-anchor" />
 
-      {active && mode === 'read' && (
+      {active && mode === 'read' && !textPicked && (
         <div className={`floating-toolbar${toolbarBelow ? ' below' : ''}`}>
           {selectionSize > 1 ? (
             <button
@@ -359,8 +379,13 @@ export const BlockCard = memo(function BlockCard({
         <div className="block-meta-line">
           <span>{image ? '图片' : `${countChars(editing?.draft ?? block.text)} 字`}</span>
           {pathText && <span>· {pathText}</span>}
+          {labeled && mode !== 'edit' && <span className="block-labeled">· 你标了：读着像 AI</span>}
           {mode === 'edit' ? (
-            <span>· ↵ 分段 · Shift+↵ 换行 · Esc 完成</span>
+            <span>
+              {tableLineRanges(editing?.draft ?? block.text).length
+                ? '· 表格里 ↵ 加一行，最后一行空着再按 ↵ 结束表格 · Esc 完成'
+                : '· ↵ 分段 · Shift+↵ 换行 · Esc 完成'}
+            </span>
           ) : (
             block.versions.length > 1 && <span>· {block.versions.length} 个版本</span>
           )}
@@ -397,6 +422,17 @@ export const BlockCard = memo(function BlockCard({
                   }}
                 />
                 <MenuItem label="去 AI 味" onClick={() => (closeMenu(), void deflavorBlock(id))} />
+                {(() => {
+                  // 划选了这一段里的一句：只标那一句；否则标整段（再点一次取消）
+                  const r = useUIStore.getState().textRange
+                  const quote = r && r.blockId === id && r.end > r.start ? block.text.slice(r.start, r.end) : undefined
+                  return (
+                    <MenuItem
+                      label={quote ? '这句读着像 AI' : labeled ? '取消「读着像 AI」' : '读着像 AI'}
+                      onClick={() => (closeMenu(), void useLabelStore.getState().toggle(id, quote))}
+                    />
+                  )
+                })()}
               </>
             )}
             <div className="context-menu-sep" />
@@ -416,6 +452,15 @@ export const BlockCard = memo(function BlockCard({
                 closeMenu()
                 const fresh = useProjectStore.getState().insertParagraphAfter(id)
                 if (fresh) ui().beginEdit(fresh)
+              }}
+            />
+            <MenuItem
+              label="在下方插入表格"
+              onClick={() => {
+                closeMenu()
+                const fresh = useProjectStore.getState().insertParagraphAfter(id, TABLE_TEMPLATE)
+                // 光标放在第一个表头格"列 1"的开头
+                if (fresh) ui().beginEdit(fresh, 2)
               }}
             />
             <MenuItem
@@ -533,6 +578,7 @@ function opsInContext(s: Suggestion, paragraph: string): DiffOp[] {
 /**
  * 编辑框按键：回车分段、Shift+回车换行、段首退格合并、段尾 Delete 合并、
  * 段首 ↑ / 段尾 ↓ 跨段、Esc 或 Ctrl+回车完成。输入法组字期间一律不拦截。
+ * 表格里回车加一行（最后一行空着再按回车就结束表格、另起一段）；代码块里回车只是换行。
  */
 export function handleEditorKey(
   e: React.KeyboardEvent<HTMLTextAreaElement | HTMLInputElement>,
@@ -552,6 +598,18 @@ export function handleEditorKey(
       return true
     }
     if (e.key === 'Enter' && !e.shiftKey && !e.altKey) {
+      const table = el instanceof HTMLTextAreaElement ? tableEnter(el.value, start, end) : null
+      if (table?.kind === 'row') {
+        applyTextEdit(el as HTMLTextAreaElement, table.edit)
+        return true
+      }
+      if (table?.kind === 'exit') {
+        ui.updateEditDraft(table.text)
+        ui.splitAtCaret(table.caret, table.caret)
+        return true
+      }
+      // 代码块整段是一个块：回车交给输入框换行
+      if (/^ {0,3}(`{3,}|~{3,})/.test(el.value)) return false
       ui.splitAtCaret(start, end)
       return true
     }

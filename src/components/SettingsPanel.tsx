@@ -7,7 +7,7 @@
 import { useEffect, useState } from 'react'
 import { useUIStore, type BodyFont, type Measure, type TextSize } from '../store/uiStore'
 import { useAIConfigStore } from '../store/aiConfigStore'
-import { PROVIDERS, STYLE_OPTIONS, providerById, type AIStyle } from '../lib/aiConfig'
+import { PROVIDERS, STYLE_OPTIONS, keyMismatch, providerById, type AIStyle } from '../lib/aiConfig'
 import { testConnection } from '../lib/ai'
 import { isTauri } from '../lib/platform'
 import { SegmentedControl } from './SegmentedControl'
@@ -40,6 +40,7 @@ export function SettingsPanel() {
   const [test, setTest] = useState<TestState>({ kind: 'idle' })
   const [advancedOpen, setAdvancedOpen] = useState(config.provider === 'custom')
   const preset = providerById(config.provider)
+  const keyWarning = keyMismatch(preset, keyDraft)
 
   useEffect(() => {
     void useAIConfigStore.getState().refreshKeyPresence()
@@ -101,19 +102,42 @@ export function SettingsPanel() {
         <div className="settings-body">
           <section className="settings-section">
             <div className="settings-section-title">AI 服务</div>
-            <div className="provider-grid" role="radiogroup" aria-label="服务商">
-              {PROVIDERS.map((p) => (
-                <button
-                  key={p.id}
-                  role="radio"
-                  aria-checked={config.provider === p.id}
-                  className={`provider-option${config.provider === p.id ? ' selected' : ''}`}
-                  onClick={() => void pickProvider(p.id)}
-                >
-                  {p.name}
-                </button>
+            <div className="provider-groups" role="radiogroup" aria-label="服务商">
+              {[
+                { caption: '按量付费', items: PROVIDERS.filter((p) => !p.plan), cls: 'provider-grid' },
+                { caption: '套餐（Token Plan / 会员额度）', items: PROVIDERS.filter((p) => p.plan), cls: 'provider-grid plans' },
+              ].map((g) => (
+                <div key={g.caption}>
+                  <span className="provider-caption">{g.caption}</span>
+                  <div className={g.cls}>
+                    {g.items.map((p) => (
+                      <button
+                        key={p.id}
+                        role="radio"
+                        aria-checked={config.provider === p.id}
+                        className={`provider-option${config.provider === p.id ? ' selected' : ''}`}
+                        onClick={() => void pickProvider(p.id)}
+                        title={p.name}
+                      >
+                        {p.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               ))}
             </div>
+            {preset.note && <span className="settings-hint">{preset.note}</span>}
+            {preset.regions && preset.regions.length > 1 && (
+              <div className="field">
+                <span className="field-label">地域</span>
+                <SegmentedControl<string>
+                  value={config.baseURL}
+                  items={preset.regions.map((r) => ({ value: r.baseURL, label: r.label }))}
+                  onChange={(baseURL) => update({ baseURL })}
+                  ariaLabel="地域"
+                />
+              </div>
+            )}
 
             <div className="field">
               <label className="field-label" htmlFor="api-key-input">
@@ -142,6 +166,11 @@ export function SettingsPanel() {
                   {showKey ? '隐藏' : '显示'}
                 </button>
               </div>
+              {keyWarning && (
+                <span className="settings-status warn" role="status">
+                  {keyWarning}
+                </span>
+              )}
             </div>
 
             <div className="settings-row" style={{ gap: 8 }}>

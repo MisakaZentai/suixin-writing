@@ -1,10 +1,14 @@
 /**
  * AI 味检查与打分（设计见 docs/AI味方案.md）。
  *
- * 打分沿用作者的 round_score：只有超出作者基线（没有就用内置人类基线）× 1.5 的密度才计罚分，
- * 罚分 = 超标 × 严重度权重 × 2；再换算成 0–100 的"AI 味指数"（越高越重）。
+ * 打分（二期）：按"次数是否显著"算。每条规则的期望次数
+ * λ = 基线密度 × 1.5 × 字数 / 万（基线密度至少每万字 0.5），实际次数 k 的泊松尾概率
+ * P(X ≥ k) < 0.01 才罚，罚分 = (−log₁₀P − 2) × 严重度权重 × 2，单条有上限；再换算成 0–100 的
+ * "AI 味指数"（越高越重）。这样短文里碰巧出现一次稀有句式不会顶满罚分。
+ * 个人基线：语料两万字以上时直接用（作者从来不用的写法可以收紧）；少于两万字只放宽、不收紧。
  * 数字只用来找嫌疑，由作者定案：每一处命中都带规则、原因与改法。
  */
+import { maskTables } from '../md'
 import {
   RULES,
   SEVERITY_WEIGHT,
@@ -107,12 +111,17 @@ export interface DocumentFlavor extends FlavorReport {
 
 const TOLERANCE = 1.5
 const PENALTY_PER_UNIT = 2
+/** 基线密度的下限（每万字）：没见过的写法也不等于"无限惊讶" */
+const MIN_BASE = 0.5
+/** 个人基线至少这么多字才允许比内置基线更严 */
+const TIGHTEN_MIN_CHARS = 20000
+/** 泊松尾概率低于这个才算超标（−log₁₀ 0.01 = 2） */
+const SIGNIFICANCE = 2
 /** 单条规则的罚分上限：边际递减，免得一个口头禅压倒一切；轻 / 提醒级规则单独最多到"轻微" */
-const RULE_CAP = 50
+const RULE_CAP = 40
 const SEVERITY_CAP: Record<Severity, number> = { high: RULE_CAP, medium: RULE_CAP, low: 20, reminder: 10 }
 const INDEX_SCALE = 60
 const SMOOTH_DOC = 1000
-const SMOOTH_BLOCK = 600
 const MIN_CHARS = 20
 
 /* ── 基础 ─────────────────────────────────────────── */
@@ -230,30 +239,45 @@ function scan(text: string, genre: Genre, opts: FlavorOptions, block?: string): 
 
 /* ── 打分 ─────────────────────────────────────────── */
 
+/**
+ * 每万字的基线密度，不低于 MIN_BASE。个人语料够多（两万字以上）时直接用个人的：作者从来不用的写法可以收紧，
+ * 泊松计分下偶尔一次也不会被重罚；语料少时统计不稳，个人基线只用来放宽（与内置的取较大者）。
+ */
 function baseDensity(rule: FlavorRule, baseline: FlavorBaseline | null | undefined): number {
-  if (baseline && baseline.chars > 0) return ((baseline.counts[rule.id] ?? 0) / baseline.chars) * 10000
-  return rule.base
+  if (!baseline || baseline.chars <= 0) return Math.max(MIN_BASE, rule.base)
+  const personal = ((baseline.counts[rule.id] ?? 0) / baseline.chars) * 10000
+  return baseline.chars >= TIGHTEN_MIN_CHARS ? Math.max(MIN_BASE, personal) : Math.max(MIN_BASE, rule.base, personal)
 }
 
-function scoreRules(
-  counts: Map<string, number>,
-  chars: number,
-  narration: number,
-  smoothing: number,
-  genre: Genre,
-  opts: FlavorOptions
-): RuleStat[] {
+/** −log₁₀ P(X ≥ k)，X ~ 泊松(λ)。k 不超过 λ 时返回 0（不可能显著） */
+export function poissonSurprise(k: number, lambda: number): number {
+  if (k <= 0 || k <= lambda) return 0
+  let logFact = 0
+  for (let i = 2; i <= k; i++) logFact += Math.log(i)
+  const logFirst = -lambda + k * Math.log(lambda) - logFact
+  // 尾部各项相对第一项的比例依次乘 λ / i，i > λ 时单调递减
+  let ratio = 1
+  let acc = 1
+  for (let i = k + 1; i < k + 500; i++) {
+    ratio *= lambda / i
+    acc += ratio
+    if (ratio < 1e-12 * acc) break
+  }
+  return Math.max(0, -(logFirst + Math.log(acc)) / Math.LN10)
+}
+
+function scoreRules(counts: Map<string, number>, chars: number, narration: number, genre: Genre, opts: FlavorOptions): RuleStat[] {
   const out: RuleStat[] = []
   for (const { rule, severity } of activeRules(genre, opts)) {
     const count = counts.get(rule.id) ?? 0
     if (!count) continue
-    const n = rule.scope === 'narration' ? narration : chars
+    const n = Math.max(1, rule.scope === 'narration' ? narration : chars)
     if (rule.minChars && n < rule.minChars) continue
-    // 轻 / 提醒级规则要有真正的密度证据：短文字里出现一两次不算
-    const smooth = severity === 'low' || severity === 'reminder' ? Math.max(smoothing, 2000) : smoothing
-    const density = (count / Math.max(n, smooth)) * 10000
+    const density = (count / n) * 10000
     const allowance = baseDensity(rule, opts.baseline) * TOLERANCE
-    const excess = Math.max(0, density - allowance)
+    // 次数是否显著超出期望：短文字里碰巧出现一两次，λ 很小但 P 也不够小，不罚
+    const surprise = poissonSurprise(count, (allowance * n) / 10000)
+    const excess = Math.max(0, surprise - SIGNIFICANCE)
     const penalty = Math.min(SEVERITY_CAP[severity], excess * SEVERITY_WEIGHT[severity] * PENALTY_PER_UNIT)
     out.push({
       rule: rule.id,
@@ -279,10 +303,12 @@ const round1 = (x: number) => Math.round(x * 10) / 10
 /* ── 对外：一段文字 ───────────────────────────────── */
 
 /** 检查一段文字（一段正文、一段待提交的改写） */
-export function analyzeText(text: string, opts: FlavorOptions = {}): FlavorReport {
+export function analyzeText(raw: string, opts: FlavorOptions = {}): FlavorReport {
+  // 表格不是行文：换成等长空白，偏移不变
+  const text = maskTables(raw)
   const genre = !opts.genre || opts.genre === 'auto' ? guessGenre(text) : opts.genre
   const s = scan(text, genre, opts)
-  const rules = scoreRules(s.counts, s.chars, s.narration, SMOOTH_BLOCK, genre, opts)
+  const rules = scoreRules(s.counts, s.chars, s.narration, genre, opts)
   const penalty = rules.reduce((n, r) => n + r.penalty, 0)
   const index = s.chars < MIN_CHARS ? null : toIndex(penalty)
   return {
@@ -301,9 +327,12 @@ export function analyzeText(text: string, opts: FlavorOptions = {}): FlavorRepor
 
 const SKIP_BLOCK = /^\s*(?:!\[[^\]]*\]\([^)]*\)\s*$|```|~~~)/
 
-/** 检查整篇（或某一节的若干块）。标题、图片、代码块不查 */
+/** 检查整篇（或某一节的若干块）。标题、图片、代码块、表格不查 */
 export function analyzeDocument(blocks: BlockInput[], opts: FlavorOptions = {}): DocumentFlavor {
-  const paras = blocks.filter((b) => b.type === 'paragraph' && b.text.trim() && !SKIP_BLOCK.test(b.text))
+  const paras = blocks
+    .filter((b) => b.type === 'paragraph' && b.text.trim() && !SKIP_BLOCK.test(b.text))
+    .map((b) => ({ ...b, text: maskTables(b.text) }))
+    .filter((b) => b.text.trim())
   const all = paras.map((b) => b.text).join('\n')
   const genre = !opts.genre || opts.genre === 'auto' ? guessGenre(all) : opts.genre
 
@@ -319,7 +348,7 @@ export function analyzeDocument(blocks: BlockInput[], opts: FlavorOptions = {}):
     for (const [k, v] of s.counts) counts.set(k, (counts.get(k) ?? 0) + v)
   }
 
-  const rules = scoreRules(counts, chars, narration, SMOOTH_DOC, genre, opts)
+  const rules = scoreRules(counts, chars, narration, genre, opts)
   const findings = structureFindings(paras, genre, chars, opts)
   const penalty = rules.reduce((n, r) => n + r.penalty, 0) + findings.reduce((n, f) => n + f.penalty, 0)
   const index = chars < MIN_CHARS ? null : toIndex(penalty)
@@ -329,7 +358,7 @@ export function analyzeDocument(blocks: BlockInput[], opts: FlavorOptions = {}):
     rules
   )
   const blockViews: BlockFlavor[] = perBlock.map(({ id, scan: s }) => {
-    const bRules = scoreRules(s.counts, s.chars, s.narration, SMOOTH_BLOCK, genre, opts)
+    const bRules = scoreRules(s.counts, s.chars, s.narration, genre, opts)
     const bPenalty = bRules.reduce((n, r) => n + r.penalty, 0)
     const bIndex = s.chars < MIN_CHARS ? null : toIndex(bPenalty)
     const shown = new Set(docHits.filter((h) => h.block === id))

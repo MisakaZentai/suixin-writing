@@ -32,7 +32,11 @@ export function editFor(text: string, start: number, end: number, action: Format
 
 /** 把格式操作写进输入框（进原生撤销栈），并选中结果 */
 export function applyFormat(el: HTMLTextAreaElement, action: FormatAction): void {
-  const edit = editFor(el.value, el.selectionStart, el.selectionEnd, action)
+  applyTextEdit(el, editFor(el.value, el.selectionStart, el.selectionEnd, action))
+}
+
+/** 把一处改动写进输入框（进原生撤销栈），并设好选区 */
+export function applyTextEdit(el: HTMLTextAreaElement, edit: Edit): void {
   el.focus()
   el.setSelectionRange(edit.from, edit.to)
   const ok = edit.insert || edit.to > edit.from ? document.execCommand('insertText', false, edit.insert) : true

@@ -7,25 +7,22 @@
  *
  * 支持：**粗** __粗__ *斜* _斜_ ~~删除线~~ `代码` [链接](url) ![图](src) 反斜杠转义；
  * 行首的 - * + 列表、1. 有序列表、> 引用、# 标题、--- 分割线；``` 代码块（整段）；
- * 管道表格（| 表头 |、|---| 分隔行、若干表体行）。
+ * GFM 表格（表头行 + |---| 分隔行 + 数据行，竖线与分隔行也是标记）。
  */
 
 export type InlineKind = 'strong' | 'em' | 'del' | 'code' | 'link'
+
+export type CellAlign = 'left' | 'center' | 'right'
 
 export type Inline =
   | { k: 'text'; from: number; to: number }
   | { k: 'mark'; from: number; to: number }
   | { k: InlineKind; from: number; to: number; children: Inline[]; href?: string }
+  /** 表格的一格：[from, to) 是去掉首尾空白后的内容，可以为空 */
+  | { k: 'cell'; from: number; to: number; children: Inline[]; align?: CellAlign }
 
-export type LineKind = 'p' | 'ul' | 'ol' | 'quote' | 'h' | 'hr' | 'code' | 'fence' | 'table' | 'tdelim'
-
-export type TableAlign = 'left' | 'center' | 'right'
-
-export interface TableCell {
-  /** 单元格文字（去掉首尾空格与分隔用的 |） */
-  from: number
-  to: number
-}
+/** tr = 表格的表头行或数据行，tdelim = 表头下面的 |---| 分隔行 */
+export type LineKind = 'p' | 'ul' | 'ol' | 'quote' | 'h' | 'hr' | 'code' | 'fence' | 'tr' | 'tdelim'
 
 export interface MdLine {
   kind: LineKind
@@ -38,9 +35,9 @@ export interface MdLine {
   level?: number
   /** 列表缩进层级（每两个空格一级） */
   indent?: number
-  /** kind === 'table'：这一行的单元格与列对齐（来自分隔行） */
-  cells?: TableCell[]
-  aligns?: TableAlign[]
+  /** 表格行：属于这一段里的第几张表（从 0 开始），表头行带 header */
+  table?: number
+  header?: boolean
   children: Inline[]
 }
 
@@ -199,58 +196,93 @@ function findClose(text: string, from: number, to: number, open: string): number
   return -1
 }
 
+/* ── 表格 ─────────────────────────────────────────── */
+
+/** 一行里没有被反斜杠转义的竖线位置（相对行首） */
+function pipesOf(line: string): number[] {
+  const out: number[] = []
+  for (let i = 0; i < line.length; i++) {
+    if (line[i] === '\\') i++
+    else if (line[i] === '|') out.push(i)
+  }
+  return out
+}
+
+/** 按竖线切开的各格原文（首尾的空格不算格） */
+function cellTexts(line: string): string[] {
+  const cuts = pipesOf(line)
+  if (!cuts.length) return []
+  const parts: string[] = []
+  let at = 0
+  for (const p of [...cuts, line.length]) {
+    parts.push(line.slice(at, p))
+    at = p + 1
+  }
+  if (!parts[0].trim()) parts.shift()
+  if (parts.length && !parts[parts.length - 1].trim()) parts.pop()
+  return parts
+}
+
+/** 表头下面的分隔行：| --- | :---: | ---: |，返回各列的对齐方式 */
+export function delimAligns(line: string): (CellAlign | undefined)[] | null {
+  if (!line.includes('|')) return null
+  const cells = cellTexts(line).map((c) => c.trim())
+  if (!cells.length || !cells.every((c) => /^:?-+:?$/.test(c))) return null
+  return cells.map((c) => (c.startsWith(':') && c.endsWith(':') ? 'center' : c.endsWith(':') ? 'right' : c.startsWith(':') ? 'left' : undefined))
+}
+
+/** 表格一行的节点：竖线与格子两边的空白是标记，格子里照常解析行内语法 */
+function rowChildren(text: string, from: number, to: number, aligns: (CellAlign | undefined)[]): Inline[] {
+  const line = text.slice(from, to)
+  const cuts = pipesOf(line).map((p) => from + p)
+  const segments: [number, number][] = []
+  let at = from
+  for (const p of [...cuts, to]) {
+    segments.push([at, p])
+    at = p + 1
+  }
+  const out: Inline[] = []
+  let markStart = from
+  let col = 0
+  segments.forEach(([s, e], idx) => {
+    const edge = idx === 0 || idx === segments.length - 1
+    if (edge && !text.slice(s, e).trim()) return
+    let cs = s
+    let ce = e
+    while (cs < ce && /\s/.test(text[cs])) cs++
+    while (ce > cs && /\s/.test(text[ce - 1])) ce--
+    if (cs > markStart) out.push({ k: 'mark', from: markStart, to: cs })
+    out.push({ k: 'cell', from: cs, to: ce, children: ce > cs ? parseInline(text, cs, ce) : [], align: aligns[col++] })
+    markStart = ce
+  })
+  if (to > markStart) out.push({ k: 'mark', from: markStart, to })
+  return out
+}
+
+interface TableSpan {
+  /** 表头行的下标，分隔行是 head + 1，数据行到 end（不含） */
+  head: number
+  end: number
+  aligns: (CellAlign | undefined)[]
+}
+
+/** 找出一段里所有的表格：表头行与分隔行的列数相同才算 */
+function findTables(raw: string[]): TableSpan[] {
+  const out: TableSpan[] = []
+  for (let i = 0; i + 1 < raw.length; i++) {
+    const aligns = delimAligns(raw[i + 1])
+    if (!aligns || !raw[i].includes('|') || cellTexts(raw[i]).length !== aligns.length) continue
+    let end = i + 2
+    while (end < raw.length && raw[end].trim() && raw[end].includes('|')) end++
+    out.push({ head: i, end, aligns })
+    i = end - 1
+  }
+  return out
+}
+
 /* ── 行 ───────────────────────────────────────────── */
 
 const FENCE = /^ {0,3}(`{3,}|~{3,})/
-
-/* 管道表格：| 开头的表头行 + |---| 分隔行 + 若干 | 开头的表体行 */
-const PIPE_LINE = /^ {0,3}\|/
-const DELIM_LINE = /^ {0,3}\|?( *:?-+:? *\|)+ *:?-+:? *\|? *$/
-
-/** 分隔行里每一列的对齐：:---: 居中、---: 右对齐、其余左对齐 */
-function delimAligns(line: string): TableAlign[] {
-  const parts = line.trim().split('|')
-  if (!parts[0].trim()) parts.shift()
-  if (parts.length && !parts[parts.length - 1].trim()) parts.pop()
-  return parts.map((p) => {
-    const t = p.trim()
-    if (t.startsWith(':') && t.endsWith(':')) return 'center'
-    if (t.endsWith(':')) return 'right'
-    return 'left'
-  })
-}
-
-/** 去掉单元格首尾的空格 */
-function cellRange(text: string, from: number, to: number): TableCell {
-  let a = from
-  let b = to
-  while (a < b && text[a] === ' ') a++
-  while (b > a && text[b - 1] === ' ') b--
-  return { from: a, to: b }
-}
-
-/** 按未转义的 | 拆出这一行的单元格（行首缩进与首尾的 | 只是分隔） */
-function splitCells(text: string, from: number, to: number): TableCell[] {
-  let start = from
-  while (text[start] === ' ') start++
-  if (text[start] === '|') start++
-  let end = to
-  while (end > start && text[end - 1] === ' ') end--
-  if (end > start && text[end - 1] === '|') end--
-  const cells: TableCell[] = []
-  let segStart = start
-  for (let i = start; i < end; i++) {
-    if (text[i] === '\\') {
-      i++
-      continue
-    }
-    if (text[i] !== '|') continue
-    cells.push(cellRange(text, segStart, i))
-    segStart = i + 1
-  }
-  cells.push(cellRange(text, segStart, end))
-  return cells
-}
 
 export function parseMarkdown(text: string): MdBlock {
   const lines: MdLine[] = []
@@ -258,46 +290,27 @@ export function parseMarkdown(text: string): MdBlock {
   const raw = text.split('\n')
   const fenced = FENCE.exec(raw[0] ?? '')
   let plain = !fenced
-  // 表格预扫描：表头行 + 分隔行 + 表体行 → 行号到 kind / 列对齐
-  const tableKind = new Map<number, 'table' | 'tdelim'>()
-  const tableAligns = new Map<number, TableAlign[]>()
-  if (!fenced) {
-    for (let i = 0; i + 1 < raw.length; i++) {
-      if (!PIPE_LINE.test(raw[i]) || !DELIM_LINE.test(raw[i + 1])) continue
-      const aligns = delimAligns(raw[i + 1])
-      tableKind.set(i, 'table')
-      tableAligns.set(i, aligns)
-      tableKind.set(i + 1, 'tdelim')
-      let j = i + 2
-      while (j < raw.length && PIPE_LINE.test(raw[j])) {
-        tableKind.set(j, 'table')
-        tableAligns.set(j, aligns)
-        j++
-      }
-      i = j - 1
-    }
-  }
+  const tables = fenced ? [] : findTables(raw)
+  const tableAt = (idx: number) => tables.findIndex((t) => idx >= t.head && idx < t.end)
   raw.forEach((line, idx) => {
     const from = pos
     const to = pos + line.length
     pos = to + 1
+    const t = tableAt(idx)
+    if (t >= 0) {
+      const span = tables[t]
+      plain = false
+      if (idx === span.head + 1) {
+        lines.push({ kind: 'tdelim', from, to, prefixEnd: from, table: t, children: to > from ? [{ k: 'mark', from, to }] : [] })
+      } else {
+        const header = idx === span.head
+        lines.push({ kind: 'tr', from, to, prefixEnd: from, table: t, header: header || undefined, children: rowChildren(text, from, to, span.aligns) })
+      }
+      return
+    }
     if (fenced) {
       const isFence = idx === 0 || (idx === raw.length - 1 && line.trim().startsWith(fenced[1][0].repeat(3)))
       lines.push({ kind: isFence ? 'fence' : 'code', from, to, prefixEnd: isFence ? to : from, children: isFence ? [] : [{ k: 'text', from, to }] })
-      return
-    }
-    const tk = tableKind.get(idx)
-    if (tk) {
-      plain = false
-      lines.push({
-        kind: tk,
-        from,
-        to,
-        prefixEnd: from,
-        cells: tk === 'table' ? splitCells(text, from, to) : undefined,
-        aligns: tk === 'table' ? tableAligns.get(idx) : undefined,
-        children: tk === 'table' ? parseInline(text, from, to) : [{ k: 'text', from, to }],
-      })
       return
     }
     let m: RegExpExecArray | null
@@ -414,4 +427,106 @@ export function toggleLines(text: string, start: number, end: number, format: Li
 
 export function applyEdit(text: string, e: Edit): string {
   return text.slice(0, e.from) + e.insert + text.slice(e.to)
+}
+
+/* ── 表格编辑 ─────────────────────────────────────── */
+
+/** 空表格：两列，表头写着"列 1""列 2"，下面一行空数据 */
+export const TABLE_TEMPLATE = '| 列 1 | 列 2 |\n| --- | --- |\n|  |  |'
+
+function emptyRow(cols: number): string {
+  return '|' + '  |'.repeat(Math.max(1, cols))
+}
+
+/**
+ * 编辑时在表格里按回车：
+ * - 在表头或数据行里：在下面加一行空行，光标进第一格（在表头按回车时加在分隔行下面）；
+ * - 在最后一行、而且这一行是空的：去掉这行空行，表示表格写完了（exit，由调用方接着分段）。
+ * 不在表格里返回 null。
+ */
+export function tableEnter(
+  text: string,
+  start: number,
+  end: number
+): { kind: 'row'; edit: Edit } | { kind: 'exit'; text: string; caret: number } | null {
+  if (start !== end) return null
+  const block = parseMarkdown(text)
+  const i = block.lines.findIndex((l) => start >= l.from && start <= l.to)
+  const line = block.lines[i]
+  if (!line || (line.kind !== 'tr' && line.kind !== 'tdelim')) return null
+  const rows = block.lines.filter((l) => l.table === line.table)
+  const cols = rows.find((l) => l.kind === 'tr')?.children.filter((c) => c.k === 'cell').length ?? 2
+  const last = rows[rows.length - 1]
+  const blank = line.kind === 'tr' && !line.header && line.children.every((c) => c.k !== 'cell' || c.to === c.from)
+  if (line === last && blank && rows.length > 2) {
+    // 去掉这行空行（连同它前面的换行），光标停在表格末尾
+    const cut = line.from - 1
+    return { kind: 'exit', text: text.slice(0, cut) + text.slice(line.to), caret: cut }
+  }
+  const after = line.header ? block.lines[i + 1] : line
+  const at = after.to
+  const insert = '\n' + emptyRow(cols)
+  return { kind: 'row', edit: { from: at, to: at, insert, selStart: at + 3, selEnd: at + 3 } }
+}
+
+/**
+ * 从 Excel / WPS / 网页表格复制来的文字（每行用制表符分列）转成 Markdown 表格，第一行当表头。
+ * 不像表格（少于两行，或各行列数不一）返回 null。
+ */
+export function tsvToTable(raw: string): string | null {
+  const rows = raw.replace(/\r\n?/g, '\n').replace(/\n+$/, '').split('\n')
+  if (rows.length < 2 || !rows.every((r) => r.includes('\t'))) return null
+  const cells = rows.map((r) => r.split('\t').map((c) => c.trim().replace(/\|/g, '\\|')))
+  const cols = cells[0].length
+  if (!cells.every((r) => r.length === cols)) return null
+  const line = (r: string[]) => `| ${r.map((c) => c || ' ').join(' | ')} |`
+  return [line(cells[0]), `| ${Array(cols).fill('---').join(' | ')} |`, ...cells.slice(1).map(line)].join('\n')
+}
+
+/** 表格所在的行（[起, 止) 偏移，不含换行）：AI 味检查等只看行文的地方用来跳过表格 */
+export function tableLineRanges(text: string): [number, number][] {
+  if (!text.includes('|')) return []
+  const raw = text.split('\n')
+  if (FENCE.test(raw[0] ?? '')) return []
+  const starts: number[] = []
+  let pos = 0
+  for (const l of raw) {
+    starts.push(pos)
+    pos += l.length + 1
+  }
+  return findTables(raw).flatMap((t) => {
+    const out: [number, number][] = []
+    for (let i = t.head; i < t.end; i++) out.push([starts[i], starts[i] + raw[i].length])
+    return out
+  })
+}
+
+/** 表格行换成等长的空白：偏移不变，统计时不算 */
+export function maskTables(text: string): string {
+  const ranges = tableLineRanges(text)
+  if (!ranges.length) return text
+  let out = ''
+  let at = 0
+  for (const [s, e] of ranges) {
+    out += text.slice(at, s) + ' '.repeat(e - s)
+    at = e
+  }
+  return out + text.slice(at)
+}
+
+/** 去掉表格行（连同多出来的空行） */
+export function stripTables(text: string): string {
+  const ranges = tableLineRanges(text)
+  if (!ranges.length) return text
+  const drop = new Set(ranges.map(([s]) => s))
+  let pos = 0
+  return text
+    .split('\n')
+    .filter((l) => {
+      const keep = !drop.has(pos)
+      pos += l.length + 1
+      return keep
+    })
+    .join('\n')
+    .trim()
 }

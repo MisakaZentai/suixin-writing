@@ -2,12 +2,12 @@
  * 段落文字的显示：Markdown 模式下按语法渲染，并叠加 AI 味命中、AI 选区等高亮。
  *
  * 两种看法共用一棵语法树，DOM 里的文字始终与源文字逐字对应（标记符号只是被隐藏或变淡）：
- * - rendered：阅读时。标记隐藏，加粗、列表、引用等显示成效果；
+ * - rendered：阅读时。标记隐藏，加粗、列表、引用、表格等显示成效果；
  * - source：编辑时垫在输入框下面。标记变淡，效果只用不改变字宽的样式（描边加粗、合成斜体、
  *   底色、颜色），保证与输入框里的文字逐字对齐。
  */
 import { useMemo, type ReactNode } from 'react'
-import { parseInline, parseMarkdown, type Inline, type MdLine } from '../lib/md'
+import { parseMarkdown, type Inline, type MdLine } from '../lib/md'
 
 export interface Highlight {
   from: number
@@ -57,6 +57,13 @@ export function MdText({ text, mode, highlights = [], plain = false }: Props) {
       if (x.k === 'text') return <span key={key++}>{seg(x.from, x.to)}</span>
       if (x.k === 'mark') return <span key={key++} className="md-mark">{seg(x.from, x.to)}</span>
       const children = inline(x.children)
+      if (x.k === 'cell') {
+        return (
+          <span key={key++} className="md-td" style={x.align && mode === 'rendered' ? { textAlign: x.align } : undefined}>
+            {children}
+          </span>
+        )
+      }
       if (x.k === 'link') {
         // 不做成真链接：在编辑器里点一下是选中段落，不该跳走
         return (
@@ -75,65 +82,6 @@ export function MdText({ text, mode, highlights = [], plain = false }: Props) {
 
   // 没有任何语法：保持一个纯文本节点（与关闭 Markdown 模式时一样）
   if (!block || block.plain) return <>{seg(0, text.length)}</>
-
-  /** 不参与显示、只为保持文字逐字对应的隐藏片段（| 、换行、分隔行等） */
-  const hidden = (from: number, to: number): ReactNode =>
-    to > from ? (
-      <span key={key++} className="md-mark">
-        {seg(from, to)}
-      </span>
-    ) : null
-
-  /** 表格的一行：单元格按列对齐，| 与换行藏进格子边缘 */
-  const tableRow = (l: MdLine, headExtra: ReactNode[] = [], tailExtra: ReactNode[] = []): ReactNode => {
-    const cells = l.cells ?? []
-    const aligns = l.aligns ?? []
-    return (
-      <span key={key++} className="md-tr">
-        {cells.map((c, ci) => {
-          const align = aligns[ci]
-          return (
-            <span key={c.from} className="md-td" style={align && align !== 'left' ? { textAlign: align } : undefined}>
-              {ci === 0 && headExtra}
-              {ci === 0 && hidden(l.from, c.from)}
-              {inline(parseInline(text, c.from, c.to))}
-              {ci + 1 < cells.length ? hidden(c.to, cells[ci + 1].from) : hidden(c.to, l.to)}
-              {ci === cells.length - 1 && tailExtra}
-            </span>
-          )
-        })}
-      </span>
-    )
-  }
-
-  /** 一整个表格：lines[i] 是表头、lines[i+1] 是分隔行、之后是表体 */
-  const tableRun = (i: number): ReactNode => {
-    const header = block.lines[i]
-    const delim = block.lines[i + 1]
-    const body: MdLine[] = []
-    let j = i + 2
-    while (j < block.lines.length && block.lines[j].kind === 'table') body.push(block.lines[j++])
-    // 表头换行 + 整个分隔行 + 分隔行换行：藏进表体首格（没有表体就藏进表头末格）
-    const mid = [
-      hidden(header.to, delim.from),
-      hidden(delim.from, delim.to),
-      body.length ? hidden(delim.to, body[0].from) : j < block.lines.length ? hidden(delim.to, block.lines[j].from) : null,
-    ]
-    return (
-      <span key={key++} className="md-table">
-        <span className="md-thead">{tableRow(header, [], body.length ? [] : mid)}</span>
-        <span className="md-tbody">
-          {body.map((l, bi) =>
-            tableRow(
-              l,
-              bi === 0 ? mid : [],
-              bi + 1 < body.length ? [hidden(l.to, body[bi + 1].from)] : j < block.lines.length ? [hidden(l.to, l.to + 1)] : [],
-            ),
-          )}
-        </span>
-      </span>
-    )
-  }
 
   const line = (l: MdLine, i: number, last: boolean): ReactNode => {
     const prefix =
@@ -164,23 +112,34 @@ export function MdText({ text, mode, highlights = [], plain = false }: Props) {
     )
   }
 
-  if (mode === 'source') return <>{block.lines.map((l, i) => line(l, i, i === block.lines.length - 1))}</>
+  const lastIdx = block.lines.length - 1
+  if (mode === 'source') return <>{block.lines.map((l, i) => line(l, i, i === lastIdx))}</>
 
-  // 阅读时：表格（表头 + 分隔行 + 表体）合并渲染成网格，其余行照常
+  // 阅读时连续的表格行包成一张表：行、格用 CSS 表格布局，竖线与分隔行只是隐藏，文字仍逐字对应
   const out: ReactNode[] = []
   for (let i = 0; i < block.lines.length; i++) {
     const l = block.lines[i]
-    if (l.kind === 'table' && block.lines[i + 1]?.kind === 'tdelim') {
-      out.push(tableRun(i))
-      while (i < block.lines.length && (block.lines[i].kind === 'table' || block.lines[i].kind === 'tdelim')) i++
-      i--
+    if (l.table === undefined) {
+      out.push(line(l, i, i === lastIdx))
       continue
     }
-    if (l.kind === 'table' || l.kind === 'tdelim') {
-      out.push(line({ ...l, kind: 'p' }, i, i === block.lines.length - 1))
-      continue
+    const rows: ReactNode[] = []
+    for (; i < block.lines.length && block.lines[i].table === l.table; i++) {
+      const r = block.lines[i]
+      const nl = i === lastIdx ? null : <span className="md-mark md-nl">{seg(r.to, r.to + 1)}</span>
+      rows.push(
+        <span key={i} className={r.kind === 'tdelim' ? 'md-tdelim' : `md-tr${r.header ? ' md-th' : ''}`}>
+          {inline(r.children)}
+          {nl}
+        </span>
+      )
     }
-    out.push(line(l, i, i === block.lines.length - 1))
+    i--
+    out.push(
+      <span key={`t${i}`} className="md-table-wrap">
+        <span className="md-table">{rows}</span>
+      </span>
+    )
   }
   return <>{out}</>
 }

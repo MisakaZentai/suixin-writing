@@ -46,6 +46,12 @@ export function analyzeProject(
   )
 }
 
+/** 留出的规则（只给作者看）不出现在给 agent 的结果里；指数照算 */
+export function isPublicRule(rule: string): boolean {
+  return !RULE_BY_ID.get(rule)?.holdout
+}
+const publicHits = (hits: FlavorHit[]) => hits.filter((h) => isPublicRule(h.rule))
+
 export function adviceOf(rule: string): string | undefined {
   return RULE_BY_ID.get(rule)?.advice
 }
@@ -53,7 +59,8 @@ export function adviceOf(rule: string): string | undefined {
 /** 给 agent 的视图：精简、带改法，命中定位可直接用于 replace（quote + in） */
 export function flavorView(d: ProjectData, report: DocumentFlavor, limit = 60) {
   const paths = headingPaths(d.blocks)
-  const rulesUsed = new Set(report.hits.map((h) => h.rule))
+  const hits = publicHits(report.hits)
+  const rulesUsed = new Set(hits.map((h) => h.rule))
   const hitView = (h: FlavorHit) => ({
     block: h.block,
     quote: h.text,
@@ -68,15 +75,15 @@ export function flavorView(d: ProjectData, report: DocumentFlavor, limit = 60) {
     genre: report.genre,
     chars: report.chars,
     baseline: report.baseline,
-    rules: report.rules.map((r) => ({ ...r, advice: adviceOf(r.rule) })),
+    rules: report.rules.filter((r) => isPublicRule(r.rule)).map((r) => ({ ...r, advice: adviceOf(r.rule) })),
     findings: report.findings.map((f) => ({ name: f.name, severity: f.severity, detail: f.detail })),
-    hits: report.hits.slice(0, limit).map(hitView),
-    more: report.hits.length > limit ? report.hits.length - limit : undefined,
+    hits: hits.slice(0, limit).map(hitView),
+    more: hits.length > limit ? hits.length - limit : undefined,
     worst: report.blocks
-      .filter((b) => b.hits.length && (b.index ?? 0) > 0)
+      .filter((b) => publicHits(b.hits).length && (b.index ?? 0) > 0)
       .sort((a, b) => (b.index ?? 0) - (a.index ?? 0))
       .slice(0, 8)
-      .map((b) => ({ block: b.block, index: b.index, level: b.level, hits: b.hits.length, preview: getBlock(d, b.block)?.text.slice(0, 40) })),
+      .map((b) => ({ block: b.block, index: b.index, level: b.level, hits: publicHits(b.hits).length, preview: getBlock(d, b.block)?.text.slice(0, 40) })),
     advice: Object.fromEntries([...rulesUsed].map((r) => [r, adviceOf(r) ?? ''])),
     note: 'AI 味指数是相对基线的超标程度，不是"AI 写的概率"；命中只是嫌疑，由作者定案。改写时不要用一种套路替换另一种。',
   }
@@ -89,7 +96,7 @@ export function textView(d: ProjectData | null, text: string, genre?: Genre, bas
     index: r.index,
     level: r.level,
     genre: r.genre,
-    hits: r.hits.map((h) => ({ quote: h.text, rule: h.rule, name: h.name, severity: h.severity, advice: adviceOf(h.rule) })),
+    hits: publicHits(r.hits).map((h) => ({ quote: h.text, rule: h.rule, name: h.name, severity: h.severity, advice: adviceOf(h.rule) })),
   }
 }
 
@@ -97,11 +104,12 @@ export function textView(d: ProjectData | null, text: string, genre?: Genre, bas
 export function flavorWarning(d: ProjectData, before: string, after: string) {
   const delta = flavorDelta(before, after, flavorOptions(d))
   // 换了说法却还是原来的套路，也要提醒
-  const reshaped = delta.kept.filter((h) => !before.includes(h.text))
-  if (!delta.added.length && !reshaped.length) return undefined
+  const added = publicHits(delta.added)
+  const reshaped = publicHits(delta.kept).filter((h) => !before.includes(h.text))
+  if (!added.length && !reshaped.length) return undefined
   const view = (h: FlavorHit) => ({ quote: h.text, rule: h.rule, name: h.name, advice: adviceOf(h.rule) })
   return {
-    added: delta.added.map(view),
+    added: added.map(view),
     ...(reshaped.length ? { reshaped: reshaped.map(view) } : {}),
     index: { before: delta.before, after: delta.after },
     hint: '这次修改带进了新的 AI 味套路。建议撤回（withdraw）后改掉再提交；确有必要保留时在 why 里说明',

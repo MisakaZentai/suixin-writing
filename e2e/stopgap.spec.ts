@@ -97,10 +97,10 @@ test('工程文件里的接口地址不参与请求，Key 只发往本机配置�
 test('服务商选择即时保存，刷新后仍在', async ({ page }) => {
   await page.goto('/')
   await page.getByRole('button', { name: '设置' }).click()
-  await page.getByRole('radio', { name: 'Kimi' }).click()
+  await page.getByRole('radio', { name: 'Kimi', exact: true }).click()
   await page.reload()
   await page.getByRole('button', { name: '设置' }).click()
-  await expect(page.getByRole('radio', { name: 'Kimi' })).toHaveAttribute('aria-checked', 'true')
+  await expect(page.getByRole('radio', { name: 'Kimi', exact: true })).toHaveAttribute('aria-checked', 'true')
   await page.getByText('高级：接口地址与模型').click()
   await expect(page.locator('#base-url-input')).toHaveValue('https://api.moonshot.cn/v1')
 })

@@ -45,6 +45,18 @@ async function errorBody(res: Response): Promise<string> {
   }
 }
 
+/** 会员 / 套餐里只给编程工具用的接口（如 Kimi Code 的 /coding/v1）拒绝时，说清楚原因 */
+export function codingOnlyHint(status: number, baseURL: string): string {
+  if ((status === 401 || status === 403) && /\/coding\/v\d/.test(baseURL)) {
+    return '（这个会员接口只对编程工具开放，可能不允许本应用调用：可用「交给 Agent」让编程工具来改，或换成按量付费的接口）'
+  }
+  return ''
+}
+
+async function statusError(res: Response, baseURL: string): Promise<Error> {
+  return new Error(`API 返回 ${res.status}：${await errorBody(res)}${codingOnlyHint(res.status, baseURL)}`)
+}
+
 /** 流式对话：yield 增量文本 */
 export async function* chatStream(
   config: AIConfig,
@@ -75,7 +87,7 @@ export async function* chatStream(
     )
   }
   if (!res.ok || !res.body) {
-    throw new Error(`API 返回 ${res.status}：${await errorBody(res)}`)
+    throw await statusError(res, config.baseURL)
   }
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
@@ -137,7 +149,7 @@ export async function chatOnce(
       `无法连接 ${config.baseURL}（${reason(e)}）`
     )
   }
-  if (!res.ok) throw new Error(`API 返回 ${res.status}：${await errorBody(res)}`)
+  if (!res.ok) throw await statusError(res, config.baseURL)
   const json = await res.json()
   return (json.choices?.[0]?.message?.content ?? '') as string
 }
@@ -161,6 +173,7 @@ const RULES = `要求：
 4. 语言与原文保持一致；
 5. 有多个段落时，段落之间用一个空行分隔；
 6. 单独一行、形如 ![图注](路径) 的是图片，原样保留在原来的位置；
+   Markdown 表格（竖线分隔各格、第二行是 | --- | 分隔行）保持表格格式与行列数，只改格子里的文字；
 7. 避免 AI 腔：旁白里不用"不是…而是…""不仅…更是…"这类先否定再纠正、递进拔高的句式，少用破折号，
    不用"值得注意的是""总而言之"一类过渡，不在段末升华总结，不堆砌"仿佛、微微、缓缓"之类虚词。`
 
@@ -297,7 +310,7 @@ const DEFLAVOR_SYSTEM = `你是一位资深的中文编辑，专门去掉文字�
 4. 把抽象的换成具体的动作、细节或感官；比喻要落在具体的形状、动作或触感上；
 5. 对白里的口吻、人物的口头禅与省略号保留；
 6. 篇幅变化不超过三成；语言、人称、时态与原文一致；
-7. 只输出修改后的正文，不要解释、引号或 Markdown 代码块；有多个段落时段落之间空一行；单独一行的 ![图注](路径) 原样保留。`
+7. 只输出修改后的正文，不要解释、引号或 Markdown 代码块；有多个段落时段落之间空一行；单独一行的 ![图注](路径) 原样保留；Markdown 表格保持表格格式，只改格子里的文字。`
 
 /** 去 AI 味：带着命中清单与作者示范段落的定向改写 */
 export function deflavorMessages(

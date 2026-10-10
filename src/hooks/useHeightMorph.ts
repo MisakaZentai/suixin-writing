@@ -44,12 +44,14 @@ export function useHeightMorph<T extends HTMLElement>(mode: string) {
     setGhost({ from })
 
     void el.offsetHeight // 强制 reflow，确保起点生效
-    requestAnimationFrame(() => {
+    // 这一帧到来前 mode 可能又变了：清理时必须取消，否则迟到的回调会把高度钉死、再没人解开
+    const frame = requestAnimationFrame(() => {
       el.classList.add('morphing')
       el.style.height = `${newH}px`
     })
 
     const cleanup = () => {
+      cancelAnimationFrame(frame)
       el.style.height = ''
       el.classList.remove('morphing')
       setGhost(null)
@@ -62,6 +64,7 @@ export function useHeightMorph<T extends HTMLElement>(mode: string) {
     el.addEventListener('transitionend', cleanup)
 
     return () => {
+      cancelAnimationFrame(frame)
       el.style.height = ''
       el.classList.remove('morphing')
       el.removeEventListener('transitionend', cleanup)

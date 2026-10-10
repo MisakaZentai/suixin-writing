@@ -8,7 +8,7 @@
 
 export type Severity = 'high' | 'medium' | 'low' | 'reminder'
 export type Genre = 'fiction' | 'essay' | 'general'
-export type RuleCategory = '句式' | '套话' | '词汇' | '叙述' | '标点' | '结构'
+export type RuleCategory = '句式' | '套话' | '词汇' | '叙述' | '手法' | '标点' | '结构'
 
 export const SEVERITY_WEIGHT: Record<Severity, number> = { high: 10, medium: 4, low: 2, reminder: 1 }
 export const SEVERITY_LABEL: Record<Severity, string> = { high: '重', medium: '中', low: '轻', reminder: '提醒' }
@@ -32,6 +32,11 @@ export interface FlavorRule {
   perBlock?: number
   /** 文字少于这么多字不查（统计性规则） */
   minChars?: number
+  /**
+   * 留出：只计入指数、只在作者的面板里列出；给 agent 的检查结果与说明里不出现（二期 P4）。
+   * 实测 agent 拿到命中清单就会把公开的套路改个说法躲开，留一部分它看不见的，指数才不会被刷低。
+   */
+  holdout?: boolean
   why: string
   advice: string
   source: string
@@ -120,6 +125,26 @@ function shortParallel(text: string): Span[] {
   return out
 }
 
+/**
+ * 转述乒乓：连续三句以上都是"某人说 / 问 / 反问……"的转述，把对话压成流水账。
+ * 排除"来说""可以说""听说"这类不是转述的词，以及"说明""问题"这类合成词。
+ */
+function reportedPingpong(text: string): Span[] {
+  const say = /^[^，。！？：]{1,8}?(?<!来|以|得|的|听|据|总)(?:就|又|也|还|便|则|先|笑着|小声)?(?:说|问|反问|追问|回答|答道|回了一句|接了一句)(?!明|法|服|话|题|号|候|起|过|完|得|不|出|了)/
+  const out: Span[] = []
+  let run: Span[] = []
+  const flush = () => {
+    if (run.length >= 3) out.push([run[0][0], run[run.length - 1][1]])
+    run = []
+  }
+  for (const sp of sentenceSpans(text)) {
+    if (say.test(text.slice(sp[0], sp[1]).trim())) run.push(sp)
+    else flush()
+  }
+  flush()
+  return out
+}
+
 /** 顿号列举：一个分句里三项以上。列的是专名（格式、产品、服务名，多含字母数字）时是正常内容，不算 */
 function denseEnumeration(text: string): Span[] {
   return re(/[^，。！？；：、,.;:!?\n]{1,12}(?:、[^，。！？；：、,.;:!?\n]{1,12}){2,}/g)(text).filter(([s, e]) => {
@@ -130,7 +155,11 @@ function denseEnumeration(text: string): Span[] {
 
 /* ── 规则 ─────────────────────────────────────────── */
 
-const NEG_LEAD = '(?<![是要若倘可])(?:并不是|并非|绝不是|从来不是|从来都不是|不是)(?!很|太|特别|吗|呢|么|嘛|吧|啊|不|没)'
+const NEG_WORD = '(?<![是要若倘可])(?:并不是|并非|绝不是|从来不是|从来都不是|不是)(?!很|太|特别|吗|呢|么|嘛|吧|啊'
+/** 逗号、破折号与"而是"的写法：「不是不优秀，是…」「不是没想过，而是…」也算 */
+const NEG_LEAD = `${NEG_WORD})`
+/** 跨句号的写法仍排除「不是不 / 不是没」：「我不是不想去。是你自己说的」多半是正常的解释 */
+const NEG_LEAD_STRICT = `${NEG_WORD}|不|没)`
 
 export const RULES: FlavorRule[] = [
   /* 句式 */
@@ -141,13 +170,18 @@ export const RULES: FlavorRule[] = [
     severity: 'high',
     scope: 'narration',
     find: any(
-      re(new RegExp(`${NEG_LEAD}[^。！？!?\\n]{1,24}?(?:[，,；;：:]\\s*|——\\s*|。\\s*)(?:而|只|更|恰恰|其实|反而|就)?是`, 'g')),
-      re(new RegExp(`${NEG_LEAD}[^，。！？!?\\n；;]{1,24}?而是`, 'g'))
+      re(new RegExp(`${NEG_LEAD}[^。！？!?\\n]{1,24}?(?:[，,；;：:]\\s*|——\\s*)(?:而|只|更|恰恰|其实|反而|就)?是`, 'g')),
+      re(new RegExp(`${NEG_LEAD_STRICT}[^。！？!?\\n]{1,24}?。\\s*(?:而|只|更|恰恰|其实|反而|就)?是`, 'g')),
+      re(new RegExp(`${NEG_LEAD}[^，。！？!?\\n；;]{1,24}?而是`, 'g')),
+      // 倒装：「这应该是习惯，不是碰巧。」
+      re(/(?:是|才是|就是)[^，。！？\n]{1,16}[，,]\s*(?:而)?不是[^，。！？\n]{1,16}[。！？]/g),
+      // 省掉"是"的否定：「那一下不冷，是……」「关系不大，是它自己……」
+      re(/(?<![也都还就])不(?!是|要|会|能|用|过|得|知|想|敢|愿)\p{Script=Han}{1,3}[，,]\s*是(?!因为|为了|不是)/gu)
     ),
     base: 2.5,
-    why: '先否定一个没人提过的说法再"纠正"，是模型最顽固的句式指纹；偶尔一用是修辞，密了就是 AI 味',
+    why: '先否定一个没人提过的说法再"纠正"，是模型最顽固的句式指纹；偶尔一用是修辞，密了就是 AI 味。倒装（"是 A，不是 B"）、"不是不 A，是 B"、省掉"是"的"不 A，是 B"都是同一个套路',
     advice: '直接说肯定的那一半；需要对比时换成具体的动作或细节（"不是握，是抓"这类具体对照可以保留）',
-    source: 'lieflat 3.4×；AI查找 parallel_negation；瑶光病灶库 S-001（每章 1–2 处）',
+    source: 'lieflat 3.4×；AI查找 parallel_negation；瑶光病灶库 S-001（每章 1–2 处）；二期评测：变体在作者随笔里 0–3%，AI 稿 18–30%（自检后的稿子改用倒装躲规则）',
   },
   {
     id: 'rather_than',
@@ -488,6 +522,97 @@ export const RULES: FlavorRule[] = [
     source: 'character-sim revise.mjs 第 2 条',
   },
 
+  /* 手法（二期：现在的模型写口语随笔时的叙事习惯；作者 39 篇随笔 vs 5 个模型的 33 篇 AI 稿） */
+  {
+    id: 'concession_balance',
+    name: '让步平衡',
+    category: '手法',
+    severity: 'medium',
+    scope: 'narration',
+    find: re(/(?:倒是|倒也|确实|的确|是挺|也挺)[^。！？\n，,]{1,16}[，,]\s*(?:就是|只是|可就是)|倒也(?:不是|没|不)[^。！？\n，,]{0,12}[，,]\s*(?:但|只是|就是)/g),
+    base: 0.5,
+    why: '先让一步再补一句缺点（"活倒是干得没毛病，就是慢"），每个评价都端平，读着像在打分',
+    advice: '直接说你真正的判断；优点和缺点哪个重要就只留哪个，或者用具体的事例说明',
+    source: '二期评测：作者随笔 3%，AI 稿 14–36%',
+  },
+  {
+    id: 'foreshadow_hook',
+    name: '伏笔钩子',
+    category: '手法',
+    severity: 'medium',
+    scope: 'narration',
+    find: re(/(?:当时|那时候?)[^。！？\n]{0,12}(?:没当回事|没在意|没多想|不以为意|没放在心上)|后来才(?:发现|知道|明白|意识到)|(?:有|留了)下文|埋下了?(?:伏笔|伏线)|这是后话|现在(?:回头)?想来/g),
+    base: 0.3,
+    why: '"当时没当回事，后来才发现……"：先预告再揭晓，是模型制造悬念的套路',
+    advice: '按事情发生的顺序写，到了该说的时候再说',
+    source: '二期评测：作者随笔 3%，AI 稿 18%',
+  },
+  {
+    id: 'signpost',
+    name: '路标宣告',
+    category: '手法',
+    severity: 'medium',
+    genres: { fiction: 'low' },
+    scope: 'narration',
+    find: re(/先说结论|说回正题|回到(?:正题|问题|开头|最开始)|(?:我的)?结论是|总结一下|简单(?:来)?说|一句话总结|下面(?:说说|聊聊|讲讲)|接下来(?:说说|聊聊|讲讲)|说到这里|扯远了/g),
+    base: 0.3,
+    why: '"所以回到问题""结论是""下面说说"：给文章插路标，像在做汇报',
+    advice: '删掉路标，直接接着写下一件事',
+    source: '二期评测：作者随笔 0%，AI 稿 23–27%',
+  },
+  {
+    id: 'reported_pingpong',
+    name: '转述乒乓',
+    category: '手法',
+    severity: 'medium',
+    scope: 'narration',
+    find: reportedPingpong,
+    base: 0.2,
+    why: '连续几句"她说……他问……她又说……"，把对话压成转述的流水账',
+    advice: '挑一两句最有味道的话直接写成对白，其余概括成一句',
+    source: '二期评测：作者随笔 0%，AI 稿 9–10%',
+  },
+  {
+    id: 'essay_wrapup',
+    name: '自述收尾',
+    category: '手法',
+    severity: 'medium',
+    scope: 'narration',
+    holdout: true,
+    find: re(/写到这(?:里|儿)?|就写到这(?:里|儿)?|先写到这|(?:大概|差不多|基本)就是这样(?:吧|了)?|就这样吧/g),
+    base: 0.5,
+    why: '"写到这里""大概就是这样吧"：模型扮演论坛随笔作者时最常用的收尾',
+    advice: '停在最后一件具体的事上，不用告诉读者你写完了',
+    source: '二期评测：作者随笔 0%，AI 稿 32–40%',
+  },
+  {
+    id: 'reaction_beat',
+    name: '反应节拍',
+    category: '手法',
+    severity: 'medium',
+    genres: { fiction: 'low' },
+    scope: 'narration',
+    holdout: true,
+    find: re(/愣了一下|愣了(?:一|两|几|半)?(?:秒|下)|愣住了|怔了一下|怔住了|顿了顿|顿了一下|沉默了(?:一会儿|几秒|片刻|一下)|心里咯噔一下|过了(?:好)?一会儿/g),
+    base: 0.5,
+    why: '"我愣了一下""过了一会儿"：用固定的停顿给情绪打拍子',
+    advice: '删掉停顿，直接写接下来做了什么、说了什么',
+    source: '二期评测：作者随笔 3%，AI 稿 36–60%',
+  },
+  {
+    id: 'that_kind',
+    name: '"是那种…"',
+    category: '手法',
+    severity: 'low',
+    scope: 'narration',
+    holdout: true,
+    find: re(/是那种|听起来/g),
+    base: 1,
+    why: '"是那种……的人""听起来……"：先贴一个类型标签，再解释，现在的模型写口语时格外爱用',
+    advice: '直接写具体的样子或事例',
+    source: '二期评测："是那种"作者随笔 3%、AI 稿 30–73%；"听起来"作者 0%、AI 稿 14–100%',
+  },
+
   /* 标点 */
   {
     id: 'em_dash',
@@ -506,6 +631,8 @@ export const RULES: FlavorRule[] = [
     name: '顿号列举',
     category: '标点',
     severity: 'low',
+    // 二期评测：文章里作者随笔 2%、AI 稿 73%，是最强的信号之一
+    genres: { essay: 'medium' },
     scope: 'narration',
     find: denseEnumeration,
     base: 10,

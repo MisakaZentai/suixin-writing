@@ -23,10 +23,26 @@ describe('agent 操作 flavor', () => {
     const v = run(d, [{ op: 'flavor' }])[0] as { index: number; hits: { quote: string; rule: string; section: string }[]; advice: Record<string, string> }
     expect(v.hits).toEqual([expect.objectContaining({ rule: 'neg_correction', quote: '不是为了看天，而是', section: '引言' })])
     expect(v.advice.neg_correction).toBeTruthy()
-    expect(v.index).toBeGreaterThan(0)
+    // 整篇只出现一次：标出位置由作者定，但不显著，不扣分
+    expect(v.index).toBe(0)
     const tail = run(d, [{ op: 'flavor', section: '尾声' }])[0] as { hits: unknown[]; index: number }
     expect(tail.hits).toEqual([])
     expect(tail.index).toBe(0)
+  })
+
+  it('留出的规则：agent 看不到命中与改法，但指数照算；作者的面板里照常列出', async () => {
+    const { analyzeText } = await import('./analyze')
+    const text = '我愣了一下。写到这里，大概就是这样吧。我又愣了一下，过了一会儿才回神。写到这儿就先这样。'
+    const v = run(doc(), [{ op: 'flavor', text }])[0] as { hits: { rule: string }[]; index: number }
+    expect(v.hits.map((h) => h.rule)).not.toContain('reaction_beat')
+    expect(v.hits.map((h) => h.rule)).not.toContain('essay_wrapup')
+    const full = analyzeText(text, { genre: 'essay' })
+    expect(full.hits.map((h) => h.rule)).toEqual(expect.arrayContaining(['reaction_beat', 'essay_wrapup']))
+    expect(v.index).toBe(full.index)
+    expect(v.index).toBeGreaterThan(0)
+    // 提交修改时的提醒也不提留出的规则
+    const w = run(doc(), [{ op: 'replace', target: { quote: '雨停的时候已经过了十二点' }, text: '我愣了一下，写到这里就先这样' }])[0] as { flavor?: unknown }
+    expect(w.flavor).toBeUndefined()
   })
 
   it('检查一段尚未提交的文字', () => {

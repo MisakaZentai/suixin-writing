@@ -43,7 +43,7 @@ describe('AI 味个人基线', () => {
     const other = baselineFromSources('别人', [{ name: 'b.txt', text: '雨停了，我去烧水。'.repeat(50) }])
     const store = upsertBaseline(upsertBaseline({ version: 1, baselines: [] }, mine, true), other)
     setBaselineStore(store)
-    const { project: d } = projectFromText('这里的冬天不是冷，而是湿。墙角长出一层白霜，被子怎么晒都是潮的。', '稿')
+    const { project: d } = projectFromText('这里的冬天不是冷，而是湿。风不是吹，而是推。雨不是下，而是砸。墙角长出一层白霜，被子怎么晒都是潮的。', '稿')
     expect(resolveBaseline(d)?.name).toBe('我')
     const withMine = analyzeProject(d)
     expect(withMine.baseline).toBe('我')

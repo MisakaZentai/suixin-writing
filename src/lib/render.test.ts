@@ -27,6 +27,14 @@ describe('渲染', () => {
     expect(html).toMatch(/<blockquote>\s*<p>我们是预测对了太多次。<\/p>/)
   })
 
+  it('表格渲染成 table，对齐方式保留', async () => {
+    const html = await renderBody(
+      { title: '', blocks: [{ type: 'paragraph', text: '| 模型 | 用时 |\n| --- | ---: |\n| mimo | 2h40m |' }] },
+      { image }
+    )
+    expect(html).toMatch(/<table>[\s\S]*<th>模型<\/th>[\s\S]*<td align="right">2h40m<\/td>[\s\S]*<\/table>/)
+  })
+
   it('图片段落成为 图 + 图注；缺失的图片给出路径', async () => {
     const html = await renderBody(doc, { image })
     expect(html).toContain('<figure><img src="data:image/png;base64,AAAA#稿.assets/a.png" alt="城里唯一一张雨的照片"><figcaption>城里唯一一张雨的照片</figcaption></figure>')
