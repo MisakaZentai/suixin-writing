@@ -73,6 +73,26 @@ describe('Markdown 模式的解析', () => {
     expect(kinds('```\n- 不是列表\n```')).toEqual(['fence', 'code', 'fence'])
     expect(parseMarkdown('普通的两行\n第二行').plain).toBe(true)
   })
+
+  it('表格：表头、分隔行、表体、单元格与对齐', () => {
+    const t = '| 名称 | 数量 |\n|:-----|-----:|\n| 苹果 | **3** |\n| 梨 | 12 |'
+    const b = parseMarkdown(t)
+    expect(b.plain).toBe(false)
+    expect(b.lines.map((l) => l.kind)).toEqual(['table', 'tdelim', 'table', 'table'])
+    expect(b.lines[0].cells?.map((c) => t.slice(c.from, c.to))).toEqual(['名称', '数量'])
+    expect(b.lines[2].cells?.map((c) => t.slice(c.from, c.to))).toEqual(['苹果', '**3**'])
+    expect(b.lines[0].aligns).toEqual(['left', 'right'])
+    expect(b.lines[3].aligns).toEqual(['left', 'right'])
+    expect(rebuild(t, b)).toBe(t)
+  })
+
+  it('表格：转义的竖线不拆格；没有分隔行就只是普通文字', () => {
+    const t = '| a \\| b | c |\n|---|---|\n| d | e |'
+    const b = parseMarkdown(t)
+    expect(b.lines[0].cells?.map((c) => t.slice(c.from, c.to))).toEqual(['a \\| b', 'c'])
+    expect(parseMarkdown('| a | b |').plain).toBe(true)
+    expect(parseMarkdown('| a |\n| b |').plain).toBe(true)
+  })
 })
 
 describe('格式操作', () => {

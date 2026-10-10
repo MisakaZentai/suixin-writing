@@ -2534,6 +2534,38 @@
   overflow-x: auto;
 }
 
+/* 表格：阅读时 | 与分隔行隐藏（文字仍在 DOM 里，与源逐字对应），只剩网格 */
+.md-rendered .md-table {
+  display: table;
+  margin: 0.5em 0;
+  border-collapse: collapse;
+  font-size: 0.92em;
+  line-height: 1.6;
+}
+.md-rendered .md-thead {
+  display: table-header-group;
+}
+.md-rendered .md-tbody {
+  display: table-row-group;
+}
+.md-rendered .md-tr {
+  display: table-row;
+}
+.md-rendered .md-td {
+  display: table-cell;
+  padding: 0.25em 0.8em;
+  border: 1px solid var(--separator);
+  vertical-align: top;
+}
+.md-rendered .md-thead .md-td {
+  font-weight: 600;
+  background: var(--bg-hover);
+}
+/* 编辑时表格就是普通源码行，只有分隔行淡一点 */
+.md-source .md-src-tdelim {
+  color: var(--text-tertiary);
+}
+
 /* 编辑：输入框的文字透明，看到的是下面的带样式源码 */
 .md-edit {
   position: relative;

@@ -6,7 +6,8 @@
  * 划选、双击落点、AI 改选中文字等按文字偏移工作的功能都不受影响。
  *
  * 支持：**粗** __粗__ *斜* _斜_ ~~删除线~~ `代码` [链接](url) ![图](src) 反斜杠转义；
- * 行首的 - * + 列表、1. 有序列表、> 引用、# 标题、--- 分割线；``` 代码块（整段）。
+ * 行首的 - * + 列表、1. 有序列表、> 引用、# 标题、--- 分割线；``` 代码块（整段）；
+ * 管道表格（| 表头 |、|---| 分隔行、若干表体行）。
  */
 
 export type InlineKind = 'strong' | 'em' | 'del' | 'code' | 'link'
@@ -16,7 +17,15 @@ export type Inline =
   | { k: 'mark'; from: number; to: number }
   | { k: InlineKind; from: number; to: number; children: Inline[]; href?: string }
 
-export type LineKind = 'p' | 'ul' | 'ol' | 'quote' | 'h' | 'hr' | 'code' | 'fence'
+export type LineKind = 'p' | 'ul' | 'ol' | 'quote' | 'h' | 'hr' | 'code' | 'fence' | 'table' | 'tdelim'
+
+export type TableAlign = 'left' | 'center' | 'right'
+
+export interface TableCell {
+  /** 单元格文字（去掉首尾空格与分隔用的 |） */
+  from: number
+  to: number
+}
 
 export interface MdLine {
   kind: LineKind
@@ -29,6 +38,9 @@ export interface MdLine {
   level?: number
   /** 列表缩进层级（每两个空格一级） */
   indent?: number
+  /** kind === 'table'：这一行的单元格与列对齐（来自分隔行） */
+  cells?: TableCell[]
+  aligns?: TableAlign[]
   children: Inline[]
 }
 
@@ -191,12 +203,80 @@ function findClose(text: string, from: number, to: number, open: string): number
 
 const FENCE = /^ {0,3}(`{3,}|~{3,})/
 
+/* 管道表格：| 开头的表头行 + |---| 分隔行 + 若干 | 开头的表体行 */
+const PIPE_LINE = /^ {0,3}\|/
+const DELIM_LINE = /^ {0,3}\|?( *:?-+:? *\|)+ *:?-+:? *\|? *$/
+
+/** 分隔行里每一列的对齐：:---: 居中、---: 右对齐、其余左对齐 */
+function delimAligns(line: string): TableAlign[] {
+  const parts = line.trim().split('|')
+  if (!parts[0].trim()) parts.shift()
+  if (parts.length && !parts[parts.length - 1].trim()) parts.pop()
+  return parts.map((p) => {
+    const t = p.trim()
+    if (t.startsWith(':') && t.endsWith(':')) return 'center'
+    if (t.endsWith(':')) return 'right'
+    return 'left'
+  })
+}
+
+/** 去掉单元格首尾的空格 */
+function cellRange(text: string, from: number, to: number): TableCell {
+  let a = from
+  let b = to
+  while (a < b && text[a] === ' ') a++
+  while (b > a && text[b - 1] === ' ') b--
+  return { from: a, to: b }
+}
+
+/** 按未转义的 | 拆出这一行的单元格（行首缩进与首尾的 | 只是分隔） */
+function splitCells(text: string, from: number, to: number): TableCell[] {
+  let start = from
+  while (text[start] === ' ') start++
+  if (text[start] === '|') start++
+  let end = to
+  while (end > start && text[end - 1] === ' ') end--
+  if (end > start && text[end - 1] === '|') end--
+  const cells: TableCell[] = []
+  let segStart = start
+  for (let i = start; i < end; i++) {
+    if (text[i] === '\\') {
+      i++
+      continue
+    }
+    if (text[i] !== '|') continue
+    cells.push(cellRange(text, segStart, i))
+    segStart = i + 1
+  }
+  cells.push(cellRange(text, segStart, end))
+  return cells
+}
+
 export function parseMarkdown(text: string): MdBlock {
   const lines: MdLine[] = []
   let pos = 0
   const raw = text.split('\n')
   const fenced = FENCE.exec(raw[0] ?? '')
   let plain = !fenced
+  // 表格预扫描：表头行 + 分隔行 + 表体行 → 行号到 kind / 列对齐
+  const tableKind = new Map<number, 'table' | 'tdelim'>()
+  const tableAligns = new Map<number, TableAlign[]>()
+  if (!fenced) {
+    for (let i = 0; i + 1 < raw.length; i++) {
+      if (!PIPE_LINE.test(raw[i]) || !DELIM_LINE.test(raw[i + 1])) continue
+      const aligns = delimAligns(raw[i + 1])
+      tableKind.set(i, 'table')
+      tableAligns.set(i, aligns)
+      tableKind.set(i + 1, 'tdelim')
+      let j = i + 2
+      while (j < raw.length && PIPE_LINE.test(raw[j])) {
+        tableKind.set(j, 'table')
+        tableAligns.set(j, aligns)
+        j++
+      }
+      i = j - 1
+    }
+  }
   raw.forEach((line, idx) => {
     const from = pos
     const to = pos + line.length
@@ -204,6 +284,20 @@ export function parseMarkdown(text: string): MdBlock {
     if (fenced) {
       const isFence = idx === 0 || (idx === raw.length - 1 && line.trim().startsWith(fenced[1][0].repeat(3)))
       lines.push({ kind: isFence ? 'fence' : 'code', from, to, prefixEnd: isFence ? to : from, children: isFence ? [] : [{ k: 'text', from, to }] })
+      return
+    }
+    const tk = tableKind.get(idx)
+    if (tk) {
+      plain = false
+      lines.push({
+        kind: tk,
+        from,
+        to,
+        prefixEnd: from,
+        cells: tk === 'table' ? splitCells(text, from, to) : undefined,
+        aligns: tk === 'table' ? tableAligns.get(idx) : undefined,
+        children: tk === 'table' ? parseInline(text, from, to) : [{ k: 'text', from, to }],
+      })
       return
     }
     let m: RegExpExecArray | null

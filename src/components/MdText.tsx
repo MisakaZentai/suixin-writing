@@ -7,7 +7,7 @@
  *   底色、颜色），保证与输入框里的文字逐字对齐。
  */
 import { useMemo, type ReactNode } from 'react'
-import { parseMarkdown, type Inline, type MdLine } from '../lib/md'
+import { parseInline, parseMarkdown, type Inline, type MdLine } from '../lib/md'
 
 export interface Highlight {
   from: number
@@ -76,6 +76,65 @@ export function MdText({ text, mode, highlights = [], plain = false }: Props) {
   // 没有任何语法：保持一个纯文本节点（与关闭 Markdown 模式时一样）
   if (!block || block.plain) return <>{seg(0, text.length)}</>
 
+  /** 不参与显示、只为保持文字逐字对应的隐藏片段（| 、换行、分隔行等） */
+  const hidden = (from: number, to: number): ReactNode =>
+    to > from ? (
+      <span key={key++} className="md-mark">
+        {seg(from, to)}
+      </span>
+    ) : null
+
+  /** 表格的一行：单元格按列对齐，| 与换行藏进格子边缘 */
+  const tableRow = (l: MdLine, headExtra: ReactNode[] = [], tailExtra: ReactNode[] = []): ReactNode => {
+    const cells = l.cells ?? []
+    const aligns = l.aligns ?? []
+    return (
+      <span key={key++} className="md-tr">
+        {cells.map((c, ci) => {
+          const align = aligns[ci]
+          return (
+            <span key={c.from} className="md-td" style={align && align !== 'left' ? { textAlign: align } : undefined}>
+              {ci === 0 && headExtra}
+              {ci === 0 && hidden(l.from, c.from)}
+              {inline(parseInline(text, c.from, c.to))}
+              {ci + 1 < cells.length ? hidden(c.to, cells[ci + 1].from) : hidden(c.to, l.to)}
+              {ci === cells.length - 1 && tailExtra}
+            </span>
+          )
+        })}
+      </span>
+    )
+  }
+
+  /** 一整个表格：lines[i] 是表头、lines[i+1] 是分隔行、之后是表体 */
+  const tableRun = (i: number): ReactNode => {
+    const header = block.lines[i]
+    const delim = block.lines[i + 1]
+    const body: MdLine[] = []
+    let j = i + 2
+    while (j < block.lines.length && block.lines[j].kind === 'table') body.push(block.lines[j++])
+    // 表头换行 + 整个分隔行 + 分隔行换行：藏进表体首格（没有表体就藏进表头末格）
+    const mid = [
+      hidden(header.to, delim.from),
+      hidden(delim.from, delim.to),
+      body.length ? hidden(delim.to, body[0].from) : j < block.lines.length ? hidden(delim.to, block.lines[j].from) : null,
+    ]
+    return (
+      <span key={key++} className="md-table">
+        <span className="md-thead">{tableRow(header, [], body.length ? [] : mid)}</span>
+        <span className="md-tbody">
+          {body.map((l, bi) =>
+            tableRow(
+              l,
+              bi === 0 ? mid : [],
+              bi + 1 < body.length ? [hidden(l.to, body[bi + 1].from)] : j < block.lines.length ? [hidden(l.to, l.to + 1)] : [],
+            ),
+          )}
+        </span>
+      </span>
+    )
+  }
+
   const line = (l: MdLine, i: number, last: boolean): ReactNode => {
     const prefix =
       l.prefixEnd > l.from ? (
@@ -105,5 +164,23 @@ export function MdText({ text, mode, highlights = [], plain = false }: Props) {
     )
   }
 
-  return <>{block.lines.map((l, i) => line(l, i, i === block.lines.length - 1))}</>
+  if (mode === 'source') return <>{block.lines.map((l, i) => line(l, i, i === block.lines.length - 1))}</>
+
+  // 阅读时：表格（表头 + 分隔行 + 表体）合并渲染成网格，其余行照常
+  const out: ReactNode[] = []
+  for (let i = 0; i < block.lines.length; i++) {
+    const l = block.lines[i]
+    if (l.kind === 'table' && block.lines[i + 1]?.kind === 'tdelim') {
+      out.push(tableRun(i))
+      while (i < block.lines.length && (block.lines[i].kind === 'table' || block.lines[i].kind === 'tdelim')) i++
+      i--
+      continue
+    }
+    if (l.kind === 'table' || l.kind === 'tdelim') {
+      out.push(line({ ...l, kind: 'p' }, i, i === block.lines.length - 1))
+      continue
+    }
+    out.push(line(l, i, i === block.lines.length - 1))
+  }
+  return <>{out}</>
 }
