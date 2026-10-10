@@ -2606,6 +2606,8 @@
 }
 .block-edit {
   position: relative;
+  /* 一出现就撑到内容高度：先缩成一行再量会让文档变矮，靠近文末时滚动位置被截掉 */
+  field-sizing: content;
   white-space: pre-wrap;
   overflow-wrap: break-word;
   font-feature-settings: "kern", "liga";

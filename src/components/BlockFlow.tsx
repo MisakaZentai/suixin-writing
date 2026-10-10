@@ -89,8 +89,10 @@ export function BlockFlow({ onScrolledChange }: Props) {
     return () => el.removeEventListener('scroll', onScroll)
   }, [onScrolledChange])
 
-  /* 定位请求 → 平滑滚动入视 + 整节高亮 */
+  /* 定位请求 → 平滑滚动入视 + 整节高亮。
+     只随请求本身触发：正文变化（完成编辑、分段等）不能把视线拉回上次定位的地方 */
   useEffect(() => {
+    const blocks = useProjectStore.getState().data?.blocks
     if (!locateRequest || !blocks) return
     const root = scrollRef.current
     const el = root?.querySelector<HTMLElement>(`[data-block-id="${locateRequest.id}"]`)
@@ -114,7 +116,7 @@ export function BlockFlow({ onScrolledChange }: Props) {
       900
     )
     return () => window.clearTimeout(timer)
-  }, [locateRequest, blocks])
+  }, [locateRequest])
 
   if (!blocks) return null
 

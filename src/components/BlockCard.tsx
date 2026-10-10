@@ -34,6 +34,8 @@ import { MdText, type Highlight } from './MdText'
 import { MdBackdrop, FormatBar, applyTextEdit, formatShortcut } from './MdEditing'
 import { TABLE_TEMPLATE, tableEnter, tableLineRanges, tsvToTable } from '../lib/md'
 
+const FIELD_SIZING = typeof CSS !== 'undefined' && CSS.supports?.('field-sizing', 'content') === true
+
 interface Props {
   block: ParagraphBlock
   /** 所在章节路径，如"第一章 / 第一节" */
@@ -120,12 +122,17 @@ export const BlockCard = memo(function BlockCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editing?.token])
 
-  /* textarea 自适应高度 */
+  /* textarea 自适应高度：支持 field-sizing 时交给 CSS。
+     不支持时用 JS 量：量的时候输入框会先缩成一行、文档跟着变矮，
+     靠近文末时滚动位置会被截掉，所以量完把滚动位置写回去 */
   useLayoutEffect(() => {
     const el = textareaRef.current
-    if (!el) return
+    if (!el || FIELD_SIZING) return
+    const scroller = el.closest<HTMLElement>('.column-wrap')
+    const top = scroller?.scrollTop
     el.style.height = 'auto'
     el.style.height = `${el.scrollHeight}px`
+    if (scroller && top !== undefined && scroller.scrollTop !== top) scroller.scrollTop = top
   }, [editing?.draft])
 
   /* 右键菜单：点击菜单外任意处关闭（Esc 由全局快捷键处理） */
