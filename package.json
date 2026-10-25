@@ -40,7 +40,7 @@
     "esbuild": "^0.25.12",
     "typescript": "^5.6.3",
     "vite": "^6.4.4",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   },
   "bin": {
     "suixin": "dist-cli/suixin.mjs"
